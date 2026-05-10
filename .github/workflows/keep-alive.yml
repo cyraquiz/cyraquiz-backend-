@@ -1,0 +1,35 @@
+name: Keep Services Alive
+
+on:
+  schedule:
+    # Corre cada 3 días a las 12:00 UTC (dentro del límite de 7 días de Supabase)
+    - cron: '0 12 */3 * *'
+  workflow_dispatch: # Permite ejecutarlo manualmente desde GitHub
+
+jobs:
+  ping:
+    name: Ping Supabase + Render
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Ping Supabase (query directa a la DB)
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${{ secrets.SUPABASE_URL }}/rest/v1/quizzes?select=id&limit=1" \
+            -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}")
+          echo "Supabase status: $STATUS"
+          if [ "$STATUS" != "200" ] && [ "$STATUS" != "401" ]; then
+            echo "⚠️  Supabase returned unexpected status $STATUS"
+            exit 1
+          fi
+          echo "✅ Supabase activo"
+
+      - name: Ping Backend Render (despertarlo)
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 30 \
+            "https://cyraquiz.onrender.com/health")
+          echo "Render status: $STATUS"
+          echo "✅ Ping enviado al backend"

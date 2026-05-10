@@ -15,8 +15,20 @@ const OpenAI = require("openai");
 
 const app = express();
 
+const allowedOrigins = [
+  "https://cyraquiz.vercel.app",
+  "http://localhost:5173",
+  "http://localhost:4173",
+];
+
 app.use(cors({
-  origin: "https://cyraquiz.vercel.app",
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: true
 }));
@@ -216,103 +228,129 @@ socket.on("show_results", (roomCode) => {
 });
 
 app.post('/upload', upload.single('pdfFile'), async (req, res) => {
+  const cleanupFile = () => {
+    if (req.file?.path) {
+      try { fs.unlinkSync(req.file.path); } catch (_) {}
+    }
+  };
+
   try {
     if (!req.file) {
-      return res.status(400).json({ error: "No se subió ningún archivo PDF" });
+      return res.status(400).json({ error: "No se subió ningún archivo PDF." });
     }
-    
-    const usarNuevoPrompt = req.body.casillaMarcada === 'true';
-    
-    console.log("Procesando archivo:", req.file.originalname);
-    console.log("¿Usar nuevo prompt?:", usarNuevoPrompt);
 
-    // Leer el PDF
+    // ── Extraer texto del PDF ──────────────────────────
     const dataBuffer = fs.readFileSync(req.file.path);
     const data = await pdf(dataBuffer);
-    const text = data.text;
+    const text = data.text?.trim() || "";
 
-    console.log("Solicitando preguntas variadas a la IA...");
+    if (text.length < 40) {
+      cleanupFile();
+      return res.status(400).json({
+        error: "No se pudo leer texto del PDF. Asegúrate de que no sea solo imágenes o esté protegido."
+      });
+    }
+
+    const usarNuevoPrompt = req.body.casillaMarcada === 'true';
 
     let instruccionesEspecificas = "";
-
     if (usarNuevoPrompt) {
       instruccionesEspecificas = `
-      El texto proporcionado es un examen o cuestionario que YA CONTIENE preguntas y respuestas. 
-      Tu tarea es EXTRAER un MÁXIMO DE 40 PREGUNTAS. Si el documento tiene más, detente al llegar a 40. Si tiene menos, extrae solo las que haya.
-      
-      REGLAS ESTRICTAS PARA LA EXTRACCIÓN:
-      1. MANTÉN EL ORDEN EXACTO en el que aparecen en el documento original. Por ningún motivo las revuelvas.
-      2. NO inventes preguntas nuevas ni agregues información que no esté en el texto.
-      3. Analiza el formato original de cada pregunta en el PDF y asígnale el tipo correspondiente ("single", "multi" o "tf") respetando fielmente cómo vienen estructuradas.
-      `;
+El texto es un examen o cuestionario que YA CONTIENE preguntas y respuestas.
+Tu tarea es EXTRAER un MÁXIMO DE 40 PREGUNTAS. Si hay menos, extrae solo las que haya.
+REGLAS:
+1. Mantén el orden exacto del documento original.
+2. No inventes preguntas nuevas ni añadas información externa.
+3. Asigna el tipo ("single", "multi" o "tf") según cómo vienen estructuradas en el original.`;
     } else {
       instruccionesEspecificas = `
-      Genera un examen de EXACTAMENTE 20 preguntas distribuidas así.
-      Mezcla los tipos de preguntas como tú creas conveniente para evaluar bien el texto.
-      `;
+Genera EXACTAMENTE 20 preguntas variadas.
+Mezcla los tipos como consideres más adecuado para evaluar el contenido.`;
     }
-    
-    const prompt = `
-      Actúa como un profesor experto. Basado en el siguiente texto: 
-      "${text.substring(0, 90000)}"
 
-      ${instruccionesEspecificas}
+    const prompt = `Actúa como un profesor experto. Basándote en el siguiente texto:
 
-      Reglas para los tipos de preguntas:
-      1. "single" (Opción múltiple): 4 opciones en el arreglo "options". La "answer" es un string con la opción correcta.
-      2. "multi" (Doble respuesta): 4 opciones. EXACTAMENTE 2 correctas. La "answer" es un ARRAY con las dos opciones.
-      3. "tf" (Verdadero/Falso): "options" debe ser exactamente ["Verdadero", "Falso"]. La "answer" es un string.
+---
+${text.substring(0, 90000)}
+---
 
-      IMPORTANTE:
-      - Devuelve SOLAMENTE un JSON puro (array de objetos).
-      - No uses markdown (\`\`\`).
+${instruccionesEspecificas}
 
-      Ejemplo de estructura JSON esperada:
-      [
-        { 
-          "type": "single", 
-          "question": "¿Capital de Francia?", 
-          "options": ["Madrid", "París", "Roma", "Berlin"], 
-          "answer": "París" 
-        },
-        { 
-          "type": "multi", 
-          "question": "¿Cuáles son frutas? (Elige 2)", 
-          "options": ["Manzana", "Coche", "Plátano", "Silla"], 
-          "answer": ["Manzana", "Plátano"] 
-        },
-        { 
-          "type": "tf", 
-          "question": "El sol es frío.", 
-          "options": ["Verdadero", "Falso"], 
-          "answer": "Falso" 
-        }
-      ]
-    `;
+TIPOS DE PREGUNTA:
+- "single": 4 opciones, "answer" es un string con la opción correcta.
+- "multi": 4 opciones, EXACTAMENTE 2 correctas, "answer" es un array con las dos opciones correctas.
+- "tf": "options" debe ser exactamente ["Verdadero","Falso"], "answer" es un string.
 
+Incluye también "time" (entre 15 y 60, en segundos) y "points" (50, 100, 200 o 500) según la dificultad.
+
+RESPONDE ÚNICAMENTE con el array JSON. Sin texto adicional, sin markdown, sin explicaciones.
+
+Ejemplo:
+[{"type":"single","question":"¿Capital de Francia?","options":["Madrid","París","Roma","Berlín"],"answer":"París","time":20,"points":100}]`;
+
+    // ── Llamada a DeepSeek ─────────────────────────────
     const completion = await deepseek.chat.completions.create({
       messages: [{ role: "user", content: prompt }],
       model: "deepseek-chat",
-      temperature: 0.7,
-      max_tokens: 8000
+      temperature: 0.6,
+      max_tokens: 12000,
     });
 
-    let aiResponse = completion.choices[0].message.content;
-    aiResponse = aiResponse.replace(/```json/g, "").replace(/```/g, "").trim();
-    
-    const questions = JSON.parse(aiResponse);
+    let aiResponse = completion.choices[0].message.content || "";
 
-    fs.unlinkSync(req.file.path);
+    // ── Extracción robusta del JSON ────────────────────
+    // Quitar bloques markdown si los hay
+    aiResponse = aiResponse.replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
 
-    res.json({ 
-      success: true, 
-      questions: questions 
-    });
+    // Encontrar el array JSON aunque haya texto antes/después
+    const jsonMatch = aiResponse.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) {
+      console.error("Respuesta de la IA sin JSON válido:", aiResponse.substring(0, 300));
+      cleanupFile();
+      return res.status(500).json({ error: "La IA no devolvió preguntas válidas. Intenta de nuevo." });
+    }
+
+    const questions = JSON.parse(jsonMatch[0]);
+
+    if (!Array.isArray(questions) || questions.length === 0) {
+      cleanupFile();
+      return res.status(500).json({ error: "La IA devolvió un resultado vacío. Intenta con otro PDF." });
+    }
+
+    // Asegurar campos mínimos en cada pregunta
+    const normalized = questions.map(q => ({
+      time:    q.time    || 20,
+      points:  q.points  || 100,
+      type:    q.type    || "single",
+      question: q.question || "",
+      options:  q.options  || [],
+      answer:   q.answer   ?? "",
+    }));
+
+    cleanupFile();
+    res.json({ success: true, questions: normalized });
 
   } catch (error) {
-    console.error("Error generando preguntas:", error);
-    res.status(500).json({ error: "Error procesando el examen con IA." });
+    console.error("Error en /upload:", error?.message || error);
+    cleanupFile();
+
+    if (error?.status === 401) {
+      return res.status(500).json({ error: "API Key de DeepSeek inválida. Verifica tu configuración." });
+    }
+    if (error?.status === 402) {
+      return res.status(500).json({ error: "Sin saldo en DeepSeek. Recarga tu cuenta en platform.deepseek.com." });
+    }
+    if (error instanceof SyntaxError) {
+      return res.status(500).json({ error: "La IA devolvió un formato inesperado. Intenta de nuevo." });
+    }
+
+    res.status(500).json({ error: "Error procesando el examen con IA. Intenta de nuevo." });
   }
+});
+
+// ── Health check (usado por GitHub Actions keep-alive) ──
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 const PORT = process.env.PORT || 4000;
