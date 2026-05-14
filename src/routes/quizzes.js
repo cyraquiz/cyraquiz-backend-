@@ -17,8 +17,8 @@ router.post("/", authorization, async (req, res) => {
     res.json(newQuiz.rows[0]);
     
   } catch (err) {
-    console.error("SAVE QUIZ ERROR:", err);
-  res.status(500).json({ error: "Error al guardar Quiz" });
+    console.error("SAVE QUIZ ERROR:", err.message, "| user:", req.user?.id, "| code:", err.code);
+    res.status(500).json({ error: err.message || "Error al guardar Quiz" });
   }
 });
 
