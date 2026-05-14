@@ -1,6 +1,7 @@
 if (process.env.NODE_ENV !== 'production') {
   require("dotenv").config();
 }
+const { randomUUID } = require('crypto');
 const authRoutes = require('./routes/auth');
 const quizRoutes = require('./routes/quizzes');
 const express = require("express");
@@ -18,7 +19,9 @@ const app = express();
 const allowedOrigins = [
   "https://cyraquiz.vercel.app",
   "http://localhost:5173",
+  "http://localhost:5174",
   "http://localhost:4173",
+  ...(process.env.ALLOWED_ORIGIN ? [process.env.ALLOWED_ORIGIN] : []),
 ];
 
 app.use(cors({
@@ -49,53 +52,96 @@ const upload = multer({ dest: uploadDir });
 
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET", "POST"] },
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    credentials: true
+  },
 });
 
 const rooms = new Map();
+
+// ── Helpers de validación ────────────────────────────────
+function validateHostToken(roomCode, hostToken) {
+  const room = rooms.get(roomCode);
+  if (!room || !hostToken) return false;
+  return room.hostToken === hostToken;
+}
+
+function sanitizeName(name) {
+  if (typeof name !== 'string') return null;
+  const trimmed = name.trim();
+  if (trimmed.length === 0 || trimmed.length > 20) return null;
+  return trimmed;
+}
+
+function validateRoomCode(code) {
+  return typeof code === 'string' && /^\d{6}$/.test(code);
+}
 
 io.on("connection", (socket) => {
   console.log("Usuario conectado:", socket.id);
 
   // CREAR SALA
   socket.on("create_room", (roomCode) => {
-   rooms.set(roomCode, { players: [], currentQuestion: 0, scores: {}, answerCounts: [0, 0, 0, 0] });
+    const hostToken = randomUUID();
+    rooms.set(roomCode, {
+      players: [],
+      currentQuestion: 0,
+      scores: {},
+      answerCounts: [0, 0, 0, 0],
+      hostToken,
+      hostSocketId: socket.id,
+    });
     socket.join(roomCode);
+    socket.emit("room_created", { hostToken });
     console.log(`Sala creada: ${roomCode}`);
   });
 
   // UNIRSE A SALA
   socket.on("join_room", ({ roomCode, playerName, avatar }) => {
-if (!rooms.has(roomCode)) {
-       console.log(`Recuperando sala ${roomCode} para ${playerName}`);
-       rooms.set(roomCode, { players: [], currentQuestion: 0, scores: {}, answerCounts: [0, 0, 0, 0] });
+    const roomStr = roomCode?.toString();
+    if (!validateRoomCode(roomStr)) {
+      socket.emit("error", "Código de sala inválido");
+      return;
     }
-    
-      const room = rooms.get(roomCode);
-      const existingPlayer = room.players.find(p => p.name === playerName);
-      
-      if (!existingPlayer) {
-        room.players.push({ 
-          id: socket.id, 
-          name: playerName, 
-          avatar: avatar || "https://api.dicebear.com/9.x/notionists/svg?seed=default",
-          score: 0,
-          timeAccumulated: 0
-        });
-      }else {
-        existingPlayer.id = socket.id;
-        console.log(`Jugador ${playerName} recuperó su sesión con nuevo ID.`);
-      }
+    const safeName = sanitizeName(playerName);
+    if (!safeName) {
+      socket.emit("error", "Nombre inválido (1-20 caracteres)");
+      return;
+    }
 
-      socket.join(roomCode);
-      io.to(roomCode).emit("player_joined", { name: playerName, avatar });
-      console.log(`${playerName} entró a la sala ${roomCode}`);
-      if (room.isAnswering && room.currentOptions) {
-      console.log(`Rescatando a ${playerName}: Enviando pregunta en curso.`);
+    if (!rooms.has(roomStr)) {
+      console.log(`Recuperando sala ${roomStr} para ${safeName}`);
+      rooms.set(roomStr, { players: [], currentQuestion: 0, scores: {}, answerCounts: [0, 0, 0, 0], hostToken: null });
+    }
+
+    const room = rooms.get(roomStr);
+    const existingPlayer = room.players.find(p => p.name === safeName);
+
+    if (!existingPlayer) {
+      room.players.push({
+        id: socket.id,
+        name: safeName,
+        avatar: avatar || "https://api.dicebear.com/9.x/notionists/svg?seed=default",
+        score: 0,
+        timeAccumulated: 0
+      });
+    } else {
+      existingPlayer.id = socket.id;
+      console.log(`Jugador ${safeName} recuperó su sesión con nuevo ID.`);
+    }
+
+    socket.join(roomStr);
+    io.to(roomStr).emit("player_joined", { name: safeName, avatar });
+    console.log(`${safeName} entró a la sala ${roomStr}`);
+
+    if (room.isAnswering && room.currentOptions) {
+      console.log(`Rescatando a ${safeName}: Enviando pregunta en curso.`);
       socket.emit("new_question", {
         type: room.currentQuestionType,
         options: room.currentOptions,
-        time: room.currentTimeLimit 
+        time: room.currentTimeLimit
       });
     }
   });
@@ -106,31 +152,32 @@ if (!rooms.has(roomCode)) {
 
     if (rooms.has(roomStr)) {
       io.to(roomStr).emit("game_started");
-      
       console.log(`Juego iniciado en sala ${roomStr} (Señal enviada a todos)`);
     } else {
       console.log("No se encontró la sala para iniciar");
     }
   });
 
-  socket.on("send_question", ({ roomCode, question, time }) => {
-    const roomStr = roomCode.toString();
-    if (rooms.has(roomStr)) {
-      const room = rooms.get(roomStr);
-      room.currentCorrectAnswer = question.answer; 
-      room.currentPoints = question.points || 100; 
-      room.currentQuestionType = question.type;
-      room.currentOptions = question.options;
-      room.answerCounts = [0, 0, 0, 0]; 
-      room.questionStartTime = Date.now();
-      room.currentTimeLimit = time; 
-      room.isAnswering = true;
+  socket.on("send_question", ({ roomCode, question, time, hostToken }) => {
+    const roomStr = roomCode?.toString();
+    if (!validateRoomCode(roomStr) || !validateHostToken(roomStr, hostToken)) {
+      socket.emit("error", "No autorizado");
+      return;
     }
+    const room = rooms.get(roomStr);
+    room.currentCorrectAnswer = question.answer;
+    room.currentPoints = question.points || 100;
+    room.currentQuestionType = question.type;
+    room.currentOptions = question.options;
+    room.answerCounts = [0, 0, 0, 0];
+    room.questionStartTime = Date.now();
+    room.currentTimeLimit = time;
+    room.isAnswering = true;
 
-    io.to(roomStr).emit("new_question", { 
-      type: question.type, 
-      options: question.options, 
-      time: time 
+    io.to(roomStr).emit("new_question", {
+      type: question.type,
+      options: question.options,
+      time: time
     });
     console.log(`Pregunta enviada a sala ${roomStr} (Tipo: ${question.type})`);
   });
@@ -145,31 +192,29 @@ if (!rooms.has(roomCode)) {
     if (player) {
       if (room.currentOptions) {
         const answersArray = Array.isArray(answer) ? answer : [answer];
-        
+
         answersArray.forEach(ans => {
           const cleanAns = typeof ans === 'string' ? ans.trim() : ans;
           const index = room.currentOptions.findIndex(opt => opt.trim() === cleanAns);
-          
+
           if (index !== -1 && index < 4) {
-            room.answerCounts[index] += 1; 
+            room.answerCounts[index] += 1;
           }
         });
 
         io.to(roomStr).emit("update_stats", room.answerCounts);
-        }
+      }
 
       let isCorrect = false;
       if (room.currentQuestionType === "multi") {
         const correctArr = Array.isArray(room.currentCorrectAnswer) ? room.currentCorrectAnswer.sort() : [];
         const answerArr = Array.isArray(answer) ? answer.sort() : [];
-        
         isCorrect = JSON.stringify(correctArr) === JSON.stringify(answerArr);
       } else {
         isCorrect = room.currentCorrectAnswer === answer;
       }
 
       const timeTaken = Date.now() - room.questionStartTime;
-
       const pointsEarned = isCorrect ? room.currentPoints : 0;
       player.score += pointsEarned;
 
@@ -178,46 +223,53 @@ if (!rooms.has(roomCode)) {
       }
 
       io.to(roomStr).emit("player_answered", { playerName });
-
-      io.to(player.id).emit("answer_result", { 
-        isCorrect, 
-        pointsEarned, 
-        totalScore: player.score 
+      io.to(player.id).emit("answer_result", {
+        isCorrect,
+        pointsEarned,
+        totalScore: player.score
       });
 
       console.log(`${playerName} respondió. Correcto: ${isCorrect}. Puntos: ${player.score}`);
     }
   });
-  
-socket.on("show_results", (roomCode) => {
-    const roomStr = roomCode.toString();
-    if (rooms.has(roomStr)) {
-      rooms.get(roomStr).isAnswering = false; 
+
+  socket.on("show_results", ({ roomCode, hostToken }) => {
+    const roomStr = roomCode?.toString();
+    if (!validateRoomCode(roomStr) || !validateHostToken(roomStr, hostToken)) {
+      socket.emit("error", "No autorizado");
+      return;
     }
+    rooms.get(roomStr).isAnswering = false;
     io.to(roomStr).emit("reveal_results");
   });
 
   // FIN DEL JUEGO
-  socket.on("game_over", (roomCode) => {
-    const roomStr = roomCode.toString();
-    if (rooms.has(roomStr)) {
-      const room = rooms.get(roomStr);
+  socket.on("game_over", ({ roomCode, hostToken }) => {
+    const roomStr = roomCode?.toString();
+    if (!validateRoomCode(roomStr) || !validateHostToken(roomStr, hostToken)) {
+      socket.emit("error", "No autorizado");
+      return;
+    }
+    const room = rooms.get(roomStr);
+    if (room) {
       const sortedPlayers = room.players.sort((a, b) => {
         if (b.score === a.score) {
           return a.timeAccumulated - b.timeAccumulated;
         }
-        return b.score - a.score; 
+        return b.score - a.score;
       });
-      
       io.to(roomStr).emit("final_results", sortedPlayers);
       console.log(`Juego terminado en sala ${roomStr}`);
     }
   });
 
-  socket.on("cancel_game", (roomCode) => {
-    const roomStr = roomCode.toString();
+  socket.on("cancel_game", ({ roomCode, hostToken }) => {
+    const roomStr = roomCode?.toString();
+    if (!validateRoomCode(roomStr) || !validateHostToken(roomStr, hostToken)) {
+      socket.emit("error", "No autorizado");
+      return;
+    }
     io.to(roomStr).emit("game_cancelled");
-    
     rooms.delete(roomStr);
     console.log(`Partida cancelada en sala ${roomStr}`);
   });
@@ -239,7 +291,6 @@ app.post('/upload', upload.single('pdfFile'), async (req, res) => {
       return res.status(400).json({ error: "No se subió ningún archivo PDF." });
     }
 
-    // ── Extraer texto del PDF ──────────────────────────
     const dataBuffer = fs.readFileSync(req.file.path);
     const data = await pdf(dataBuffer);
     const text = data.text?.trim() || "";
@@ -288,7 +339,6 @@ RESPONDE ÚNICAMENTE con el array JSON. Sin texto adicional, sin markdown, sin e
 Ejemplo:
 [{"type":"single","question":"¿Capital de Francia?","options":["Madrid","París","Roma","Berlín"],"answer":"París","time":20,"points":100}]`;
 
-    // ── Llamada a DeepSeek ─────────────────────────────
     const completion = await deepseek.chat.completions.create({
       messages: [{ role: "user", content: prompt }],
       model: "deepseek-chat",
@@ -298,11 +348,8 @@ Ejemplo:
 
     let aiResponse = completion.choices[0].message.content || "";
 
-    // ── Extracción robusta del JSON ────────────────────
-    // Quitar bloques markdown si los hay
     aiResponse = aiResponse.replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
 
-    // Encontrar el array JSON aunque haya texto antes/después
     const jsonMatch = aiResponse.match(/\[[\s\S]*\]/);
     if (!jsonMatch) {
       console.error("Respuesta de la IA sin JSON válido:", aiResponse.substring(0, 300));
@@ -317,7 +364,6 @@ Ejemplo:
       return res.status(500).json({ error: "La IA devolvió un resultado vacío. Intenta con otro PDF." });
     }
 
-    // Asegurar campos mínimos en cada pregunta
     const normalized = questions.map(q => ({
       time:    q.time    || 20,
       points:  q.points  || 100,
@@ -348,7 +394,7 @@ Ejemplo:
   }
 });
 
-// ── Health check (usado por GitHub Actions keep-alive) ──
+// ── Health check ──
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });

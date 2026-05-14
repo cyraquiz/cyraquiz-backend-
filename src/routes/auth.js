@@ -3,17 +3,18 @@ const router = express.Router();
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
-const supabaseUrl = process.env.SUPABASE_URL; 
-const supabaseKey = process.env.SUPABASE_KEY; 
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 router.post('/register', async (req, res) => {
   const { email, password } = req.body;
-  
+
   try {
-    const { data, error } = await supabase.auth.signUp({
-      email: email,
-      password: password,
+    const { data, error } = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
     });
 
     if (error) {
