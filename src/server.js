@@ -394,9 +394,15 @@ Ejemplo:
   }
 });
 
-// ── Health check ──
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+// ── Health check (keeps Supabase DB active) ──
+const db = require('./db');
+app.get('/health', async (req, res) => {
+  try {
+    await db.query('SELECT 1');
+    res.json({ status: 'ok', db: 'ok', timestamp: new Date().toISOString() });
+  } catch {
+    res.status(500).json({ status: 'ok', db: 'unreachable', timestamp: new Date().toISOString() });
+  }
 });
 
 const PORT = process.env.PORT || 4000;
