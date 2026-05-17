@@ -8,7 +8,7 @@ async function ensureTables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS assignments (
       id          SERIAL PRIMARY KEY,
-      quiz_id     BIGINT,
+      quiz_id     TEXT,
       token       VARCHAR(36) NOT NULL UNIQUE,
       teacher_id  VARCHAR(255) NOT NULL,
       title       VARCHAR(255) NOT NULL,
@@ -18,7 +18,7 @@ async function ensureTables() {
     )
   `);
 
-  // Migrar quiz_id de INTEGER a BIGINT si la tabla ya existía con tipo viejo
+  // Migrar quiz_id a TEXT si la tabla ya existía con tipo numérico
   await db.query(`
     DO $migration$
     BEGIN
@@ -26,9 +26,9 @@ async function ensureTables() {
         SELECT 1 FROM information_schema.columns
         WHERE table_name  = 'assignments'
           AND column_name = 'quiz_id'
-          AND udt_name    = 'int4'
+          AND udt_name    IN ('int4', 'int8')
       ) THEN
-        ALTER TABLE assignments ALTER COLUMN quiz_id TYPE BIGINT;
+        ALTER TABLE assignments ALTER COLUMN quiz_id TYPE TEXT USING quiz_id::TEXT;
       END IF;
     END
     $migration$
