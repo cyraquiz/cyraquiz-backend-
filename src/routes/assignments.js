@@ -8,7 +8,7 @@ async function ensureTables() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS assignments (
       id          SERIAL PRIMARY KEY,
-      quiz_id     INTEGER,
+      quiz_id     BIGINT,
       token       VARCHAR(36) NOT NULL UNIQUE,
       teacher_id  VARCHAR(255) NOT NULL,
       title       VARCHAR(255) NOT NULL,
@@ -17,15 +17,32 @@ async function ensureTables() {
       is_active   BOOLEAN DEFAULT TRUE
     )
   `);
+
+  // Migrar quiz_id de INTEGER a BIGINT si la tabla ya existía con tipo viejo
+  await db.query(`
+    DO $migration$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name  = 'assignments'
+          AND column_name = 'quiz_id'
+          AND udt_name    = 'int4'
+      ) THEN
+        ALTER TABLE assignments ALTER COLUMN quiz_id TYPE BIGINT;
+      END IF;
+    END
+    $migration$
+  `);
+
   await db.query(`
     CREATE TABLE IF NOT EXISTS assignment_submissions (
-      id            SERIAL PRIMARY KEY,
-      assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
-      student_name  VARCHAR(50) NOT NULL,
-      score         INTEGER NOT NULL DEFAULT 0,
+      id             SERIAL PRIMARY KEY,
+      assignment_id  INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+      student_name   VARCHAR(50) NOT NULL,
+      score          INTEGER NOT NULL DEFAULT 0,
       total_possible INTEGER NOT NULL DEFAULT 0,
-      answers       JSONB,
-      submitted_at  TIMESTAMP DEFAULT NOW()
+      answers        JSONB,
+      submitted_at   TIMESTAMP DEFAULT NOW()
     )
   `);
 }
@@ -51,7 +68,7 @@ router.post("/", authorization, async (req, res) => {
     res.json({ success: true, assignment: result.rows[0] });
   } catch (err) {
     console.error("CREATE ASSIGNMENT ERROR:", err.message);
-    res.status(500).json({ error: "Error al crear asignación" });
+    res.status(500).json({ error: err.message || "Error al crear asignación" });
   }
 });
 
@@ -72,7 +89,7 @@ router.get("/", authorization, async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     console.error("GET ASSIGNMENTS ERROR:", err.message);
-    res.status(500).json({ error: "Error al obtener asignaciones" });
+    res.status(500).json({ error: err.message || "Error al obtener asignaciones" });
   }
 });
 
@@ -101,7 +118,7 @@ router.get("/:id/submissions", authorization, async (req, res) => {
     });
   } catch (err) {
     console.error("GET SUBMISSIONS ERROR:", err.message);
-    res.status(500).json({ error: "Error al obtener respuestas" });
+    res.status(500).json({ error: err.message || "Error al obtener respuestas" });
   }
 });
 
@@ -121,7 +138,7 @@ router.delete("/:id", authorization, async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error("DELETE ASSIGNMENT ERROR:", err.message);
-    res.status(500).json({ error: "Error al eliminar asignación" });
+    res.status(500).json({ error: err.message || "Error al eliminar asignación" });
   }
 });
 
@@ -144,7 +161,7 @@ router.get("/student/:token", async (req, res) => {
     });
   } catch (err) {
     console.error("GET STUDENT ASSIGNMENT ERROR:", err.message);
-    res.status(500).json({ error: "Error al obtener asignación" });
+    res.status(500).json({ error: err.message || "Error al obtener asignación" });
   }
 });
 
@@ -168,7 +185,6 @@ router.post("/student/:token/submit", async (req, res) => {
 
     const assignment_id = assignment.rows[0].id;
 
-    // Check if already submitted
     const existing = await db.query(
       "SELECT id FROM assignment_submissions WHERE assignment_id = $1 AND LOWER(student_name) = LOWER($2)",
       [assignment_id, student_name.trim()]
@@ -185,7 +201,7 @@ router.post("/student/:token/submit", async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error("SUBMIT ASSIGNMENT ERROR:", err.message);
-    res.status(500).json({ error: "Error al enviar respuestas" });
+    res.status(500).json({ error: err.message || "Error al enviar respuestas" });
   }
 });
 
