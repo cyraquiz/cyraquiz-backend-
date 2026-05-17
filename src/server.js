@@ -2,8 +2,9 @@ if (process.env.NODE_ENV !== 'production') {
   require("dotenv").config();
 }
 const { randomUUID } = require('crypto');
-const authRoutes = require('./routes/auth');
-const quizRoutes = require('./routes/quizzes');
+const authRoutes        = require('./routes/auth');
+const quizRoutes        = require('./routes/quizzes');
+const assignmentRoutes  = require('./routes/assignments');
 const express = require("express");
 const cors = require("cors");
 const http = require("http");
@@ -18,6 +19,7 @@ const app = express();
 
 const allowedOrigins = [
   "https://cyraquiz.vercel.app",
+  "https://cyraquiz-frontend.vercel.app",
   "http://localhost:5173",
   "http://localhost:5174",
   "http://localhost:4173",
@@ -38,6 +40,7 @@ app.use(cors({
 app.use(express.json());
 app.use('/auth', authRoutes);
 app.use('/quizzes', quizRoutes);
+app.use('/assignments', assignmentRoutes);
 
 const deepseek = new OpenAI({
   baseURL: 'https://api.deepseek.com',
@@ -277,6 +280,108 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log("Usuario desconectado:", socket.id);
   });
+});
+
+/* ── Generación IA desde tema / texto / URL ── */
+app.post('/generate-text', async (req, res) => {
+  const { mode, content } = req.body;
+
+  if (!mode || !content || content.trim().length < 3) {
+    return res.status(400).json({ error: "Falta el contenido." });
+  }
+
+  let sourceText = null;
+
+  try {
+    if (mode === "url") {
+      const url = content.trim();
+      if (!/^https?:\/\//i.test(url)) {
+        return res.status(400).json({ error: "URL inválida. Debe comenzar con http:// o https://" });
+      }
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12000);
+      const fetchRes = await fetch(url, {
+        signal: controller.signal,
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; CYRAQuiz/1.0)" }
+      });
+      clearTimeout(timer);
+      const html = await fetchRes.text();
+      sourceText = html
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+        .replace(/\s+/g, ' ').trim();
+      if (sourceText.length < 100) {
+        return res.status(400).json({ error: "No se pudo extraer texto suficiente de esa URL." });
+      }
+    } else if (mode === "text") {
+      sourceText = content.trim();
+      if (sourceText.length < 50) {
+        return res.status(400).json({ error: "El texto es muy corto. Pega más contenido." });
+      }
+    }
+  } catch (err) {
+    if (err.name === "AbortError") {
+      return res.status(400).json({ error: "La URL tardó demasiado en responder." });
+    }
+    return res.status(400).json({ error: "No se pudo acceder a la URL. Verifica que sea pública." });
+  }
+
+  const sourceSection = sourceText
+    ? `Basándote en el siguiente texto:\n---\n${sourceText.substring(0, 90000)}\n---\n\n`
+    : '';
+  const topicSection = mode === "topic"
+    ? `Genera preguntas sobre el siguiente tema: "${content.trim()}"\n\n`
+    : '';
+
+  const prompt = `Actúa como un profesor experto. ${sourceSection}${topicSection}Genera EXACTAMENTE 20 preguntas variadas. Mezcla los tipos como consideres más adecuado para evaluar el contenido.
+
+TIPOS DE PREGUNTA:
+- "single": 4 opciones, "answer" es un string con la opción correcta.
+- "multi": 4 opciones, EXACTAMENTE 2 correctas, "answer" es un array con las dos opciones correctas.
+- "tf": "options" debe ser exactamente ["Verdadero","Falso"], "answer" es un string.
+
+Incluye también "time" (entre 15 y 60, en segundos) y "points" (50, 100, 200 o 500) según la dificultad.
+
+RESPONDE ÚNICAMENTE con el array JSON. Sin texto adicional, sin markdown, sin explicaciones.`;
+
+  try {
+    const completion = await deepseek.chat.completions.create({
+      messages: [{ role: "user", content: prompt }],
+      model: "deepseek-chat",
+      temperature: 0.6,
+      max_tokens: 12000,
+    });
+
+    let aiResponse = completion.choices[0].message.content || "";
+    aiResponse = aiResponse.replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
+    const jsonMatch = aiResponse.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) {
+      return res.status(500).json({ error: "La IA no devolvió preguntas válidas. Intenta de nuevo." });
+    }
+
+    const questions = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(questions) || questions.length === 0) {
+      return res.status(500).json({ error: "La IA devolvió un resultado vacío. Intenta de nuevo." });
+    }
+
+    const normalized = questions.map(q => ({
+      time:     q.time     || 20,
+      points:   q.points   || 100,
+      type:     q.type     || "single",
+      question: q.question || "",
+      options:  q.options  || [],
+      answer:   q.answer   ?? "",
+    }));
+
+    res.json({ success: true, questions: normalized });
+  } catch (error) {
+    console.error("Error en /generate-text:", error?.message || error);
+    if (error?.status === 402) return res.status(500).json({ error: "Sin saldo en DeepSeek." });
+    res.status(500).json({ error: "Error generando preguntas con IA. Intenta de nuevo." });
+  }
 });
 
 app.post('/upload', upload.single('pdfFile'), async (req, res) => {
