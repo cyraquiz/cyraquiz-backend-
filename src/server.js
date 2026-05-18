@@ -142,9 +142,13 @@ io.on("connection", (socket) => {
     if (room.isAnswering && room.currentOptions) {
       console.log(`Rescatando a ${safeName}: Enviando pregunta en curso.`);
       socket.emit("new_question", {
-        type: room.currentQuestionType,
-        options: room.currentOptions,
-        time: room.currentTimeLimit
+        type:     room.currentQuestionType,
+        question: room.currentQuestion || "",
+        options:  room.currentOptions,
+        time:     room.currentTimeLimit,
+        points:   room.currentPoints || 100,
+        min:      room.currentMin ?? 0,
+        max:      room.currentMax ?? 100,
       });
     }
   });
@@ -172,15 +176,22 @@ io.on("connection", (socket) => {
     room.currentPoints = question.points || 100;
     room.currentQuestionType = question.type;
     room.currentOptions = question.options;
+    room.currentQuestion = question.question || "";
+    room.currentMin = question.min ?? 0;
+    room.currentMax = question.max ?? 100;
     room.answerCounts = [0, 0, 0, 0];
     room.questionStartTime = Date.now();
     room.currentTimeLimit = time;
     room.isAnswering = true;
 
     io.to(roomStr).emit("new_question", {
-      type: question.type,
-      options: question.options,
-      time: time
+      type:     question.type,
+      question: question.question || "",
+      options:  question.options,
+      time:     time,
+      points:   question.points || 100,
+      min:      question.min ?? 0,
+      max:      question.max ?? 100,
     });
     console.log(`Pregunta enviada a sala ${roomStr} (Tipo: ${question.type})`);
   });
