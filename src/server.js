@@ -532,7 +532,7 @@ if (LOCAL_MODE) {
   if (fs.existsSync(path.join(publicDir, 'index.html'))) {
     app.use(express.static(publicDir, { index: false }));
     // SPA fallback: rutas no-API devuelven index.html
-    app.get('*', (req, res, next) => {
+    app.get('/{*path}', (req, res, next) => {
       if (req.path.startsWith('/auth') || req.path.startsWith('/quizzes') ||
           req.path.startsWith('/assignments') || req.path.startsWith('/upload') ||
           req.path.startsWith('/generate') || req.path.startsWith('/health')) {
