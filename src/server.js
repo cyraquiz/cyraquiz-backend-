@@ -142,7 +142,11 @@ io.on("connection", (socket) => {
     io.to(roomStr).emit("player_joined", { name: safeName, avatar });
     console.log(`${safeName} entró a la sala ${roomStr}`);
 
-    if (room.isAnswering && room.currentOptions) {
+    if (room.isGameOver && room.finalResults) {
+      socket.emit("final_results", room.finalResults);
+    } else if (room.isShowingResults) {
+      socket.emit("reveal_results");
+    } else if (room.isAnswering && room.currentOptions) {
       console.log(`Rescatando a ${safeName}: Enviando pregunta en curso.`);
       socket.emit("new_question", {
         type:     room.currentQuestionType,
@@ -187,6 +191,7 @@ io.on("connection", (socket) => {
     room.questionStartTime = Date.now();
     room.currentTimeLimit = time;
     room.isAnswering = true;
+    room.isShowingResults = false;
 
     io.to(roomStr).emit("new_question", {
       type:     question.type,
@@ -258,7 +263,9 @@ io.on("connection", (socket) => {
       socket.emit("error", "No autorizado");
       return;
     }
-    rooms.get(roomStr).isAnswering = false;
+    const room = rooms.get(roomStr);
+    room.isAnswering = false;
+    room.isShowingResults = true;
     io.to(roomStr).emit("reveal_results");
   });
 
@@ -271,12 +278,14 @@ io.on("connection", (socket) => {
     }
     const room = rooms.get(roomStr);
     if (room) {
-      const sortedPlayers = room.players.sort((a, b) => {
-        if (b.score === a.score) {
-          return a.timeAccumulated - b.timeAccumulated;
-        }
+      const sortedPlayers = [...room.players].sort((a, b) => {
+        if (b.score === a.score) return a.timeAccumulated - b.timeAccumulated;
         return b.score - a.score;
       });
+      room.isGameOver = true;
+      room.finalResults = sortedPlayers;
+      room.isShowingResults = false;
+      room.isAnswering = false;
       io.to(roomStr).emit("final_results", sortedPlayers);
       console.log(`Juego terminado en sala ${roomStr}`);
     }
