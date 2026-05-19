@@ -4,13 +4,19 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "local": "LOCAL_MODE=true node src/server.js",
+    "local:win": "set LOCAL_MODE=true && node src/server.js",
+    "setup:local": "node scripts/setup-local.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "@supabase/supabase-js": "^2.96.0",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "qrcode-terminal": "^0.12.0",
     "cors": "^2.8.6",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",

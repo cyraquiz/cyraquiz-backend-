@@ -12,8 +12,11 @@ const { Server } = require("socket.io");
 const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const pdf = require("pdf-extraction");
 const OpenAI = require("openai");
+
+const LOCAL_MODE = process.env.LOCAL_MODE === 'true';
 
 const app = express();
 
@@ -26,17 +29,19 @@ const allowedOrigins = [
   ...(process.env.ALLOWED_ORIGIN ? [process.env.ALLOWED_ORIGIN] : []),
 ];
 
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error("Not allowed by CORS"));
-    }
-  },
-  methods: ["GET", "POST", "PUT", "DELETE"],
-  credentials: true
-}));
+// En modo local aceptamos cualquier origen (red interna de la escuela)
+app.use(cors(
+  LOCAL_MODE
+    ? { origin: true, methods: ["GET", "POST", "PUT", "DELETE"], credentials: true }
+    : {
+        origin: (origin, callback) => {
+          if (!origin || allowedOrigins.includes(origin)) callback(null, true);
+          else callback(new Error("Not allowed by CORS"));
+        },
+        methods: ["GET", "POST", "PUT", "DELETE"],
+        credentials: true,
+      }
+));
 app.use(express.json());
 app.use('/auth', authRoutes);
 app.use('/quizzes', quizRoutes);
@@ -55,11 +60,9 @@ const upload = multer({ dest: uploadDir });
 
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: {
-    origin: allowedOrigins,
-    methods: ["GET", "POST"],
-    credentials: true
-  },
+  cors: LOCAL_MODE
+    ? { origin: true, methods: ["GET", "POST"], credentials: true }
+    : { origin: allowedOrigins, methods: ["GET", "POST"], credentials: true },
 });
 
 const rooms = new Map();
@@ -517,14 +520,71 @@ const db = require('./db');
 app.get('/health', async (req, res) => {
   try {
     await db.query('SELECT 1');
-    res.json({ status: 'ok', db: 'ok', timestamp: new Date().toISOString() });
+    res.json({ status: 'ok', db: 'ok', mode: LOCAL_MODE ? 'local' : 'cloud', timestamp: new Date().toISOString() });
   } catch {
-    res.status(500).json({ status: 'ok', db: 'unreachable', timestamp: new Date().toISOString() });
+    res.status(500).json({ status: 'ok', db: 'unreachable', mode: LOCAL_MODE ? 'local' : 'cloud', timestamp: new Date().toISOString() });
   }
 });
 
+// ── Modo local: servir el frontend desde public/ ──
+if (LOCAL_MODE) {
+  const publicDir = path.join(__dirname, '../public');
+  if (fs.existsSync(path.join(publicDir, 'index.html'))) {
+    app.use(express.static(publicDir, { index: false }));
+    // SPA fallback: rutas no-API devuelven index.html
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/auth') || req.path.startsWith('/quizzes') ||
+          req.path.startsWith('/assignments') || req.path.startsWith('/upload') ||
+          req.path.startsWith('/generate') || req.path.startsWith('/health')) {
+        return next();
+      }
+      res.sendFile(path.join(publicDir, 'index.html'));
+    });
+  } else {
+    console.warn('\n⚠  No se encontró public/index.html — ejecuta "npm run setup:local" primero.\n');
+  }
+}
+
+// ── Helpers modo local ──
+function getLocalIP() {
+  for (const addrs of Object.values(os.networkInterfaces())) {
+    for (const addr of addrs) {
+      if (addr.family === 'IPv4' && !addr.internal) return addr.address;
+    }
+  }
+  return 'localhost';
+}
+
+async function startupSync() {
+  const localDb = require('./db/local');
+  console.log('Sincronizando quizzes con la nube...');
+  try {
+    const result = await db.query('SELECT * FROM quizzes');
+    const count = localDb.syncQuizzes(result.rows);
+    console.log(`✓ ${count} quizzes sincronizados`);
+  } catch {
+    const data = require('./db/local').DATA_DIR;
+    console.log(`⚠  Sin internet — usando datos en ${data}`);
+  }
+}
+
 const PORT = process.env.PORT || 4000;
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server listening on port ${PORT}`);
+server.listen(PORT, "0.0.0.0", async () => {
+  if (LOCAL_MODE) {
+    const ip  = getLocalIP();
+    const url = `http://${ip}:${PORT}`;
+    console.log('\n╔═══════════════════════════════════════════════╗');
+    console.log('║         CYRAQuiz  —  Modo Local               ║');
+    console.log(`║  URL: ${url.padEnd(40)}║`);
+    console.log('║  Comparte esta URL con tus estudiantes        ║');
+    console.log('╚═══════════════════════════════════════════════╝\n');
+    try {
+      const qr = require('qrcode-terminal');
+      qr.generate(url, { small: true });
+    } catch { /* qrcode-terminal opcional */ }
+    await startupSync();
+  } else {
+    console.log(`Server listening on port ${PORT}`);
+  }
 });

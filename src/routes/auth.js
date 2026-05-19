@@ -1,26 +1,30 @@
-const express = require('express');
-const router = express.Router();
-const { createClient } = require('@supabase/supabase-js');
+const express  = require('express');
+const router   = express.Router();
+const bcrypt   = require('bcryptjs');
+const jwt      = require('jsonwebtoken');
+const localDb  = require('../db/local');
 require('dotenv').config();
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+const LOCAL_MODE   = process.env.LOCAL_MODE === 'true';
+const LOCAL_SECRET = process.env.LOCAL_JWT_SECRET || 'cyraquiz-local-offline-secret';
+
+function makeLocalToken(userId, email) {
+  return jwt.sign({ userId, email }, LOCAL_SECRET, { expiresIn: '12h' });
+}
+
+function supabaseClient() {
+  const { createClient } = require('@supabase/supabase-js');
+  return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+}
 
 router.post('/register', async (req, res) => {
+  if (LOCAL_MODE) {
+    return res.status(503).json({ error: "El registro no está disponible en modo local. Crea tu cuenta desde cyraquiz.vercel.app." });
+  }
   const { email, password } = req.body;
-
   try {
-    const { data, error } = await supabase.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-    });
-
-    if (error) {
-      return res.status(400).json({ error: error.message });
-    }
-
+    const { data, error } = await supabaseClient().auth.admin.createUser({ email, password, email_confirm: true });
+    if (error) return res.status(400).json({ error: error.message });
     res.json({ message: "Usuario creado en Supabase", user: data.user });
   } catch (err) {
     console.error(err);
@@ -31,29 +35,63 @@ router.post('/register', async (req, res) => {
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
-  try {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: email,
-      password: password,
-    });
-
-    if (error) {
-      const msj = error.message.includes("Email not confirmed") 
-        ? "Por favor, confirma tu correo antes de iniciar sesión." 
-        : "Credenciales incorrectas";
-      return res.status(400).json({ error: msj });
+  if (!LOCAL_MODE) {
+    // ── Modo nube normal ──
+    try {
+      const { data, error } = await supabaseClient().auth.signInWithPassword({ email, password });
+      if (error) {
+        const msg = error.message.includes("Email not confirmed")
+          ? "Por favor, confirma tu correo antes de iniciar sesión."
+          : "Credenciales incorrectas";
+        return res.status(400).json({ error: msg });
+      }
+      return res.json({ message: "Login exitoso", token: data.session.access_token, user: data.user });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).send("Error en el servidor al iniciar sesión");
     }
-
-    res.json({ 
-      message: "Login exitoso", 
-      token: data.session.access_token, 
-      user: data.user 
-    });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).send("Error en el servidor al iniciar sesión");
   }
+
+  // ── Modo local: intentar Supabase con timeout, si falla usar caché ──
+  let supabaseUser = null;
+  try {
+    const result = await Promise.race([
+      supabaseClient().auth.signInWithPassword({ email, password }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
+    ]);
+    if (!result.error) supabaseUser = result.data?.user;
+  } catch (_) { /* timeout o sin internet */ }
+
+  if (supabaseUser) {
+    // Online: actualizar caché de credenciales y sincronizar quizzes
+    const hash = await bcrypt.hash(password, 10);
+    localDb.saveUser({ id: supabaseUser.id, email, passwordHash: hash });
+
+    try {
+      const db = require('../db');
+      const result = await db.query('SELECT * FROM quizzes WHERE user_id = $1', [supabaseUser.id]);
+      const count = localDb.syncQuizzes(result.rows);
+      console.log(`✓ ${count} quizzes sincronizados para ${email}`);
+    } catch (_) { /* La DB de quizzes puede no estar disponible */ }
+
+    const token = makeLocalToken(supabaseUser.id, email);
+    return res.json({ message: "Login exitoso", token, user: supabaseUser });
+  }
+
+  // Sin internet: verificar credenciales almacenadas localmente
+  const cached = localDb.findUserByEmail(email);
+  if (!cached) {
+    return res.status(400).json({
+      error: "Sin conexión a internet. Debes iniciar sesión con internet al menos una vez desde este equipo.",
+    });
+  }
+
+  const match = await bcrypt.compare(password, cached.passwordHash);
+  if (!match) return res.status(400).json({ error: "Credenciales incorrectas" });
+
+  console.log(`Login offline para ${email}`);
+  const token = makeLocalToken(cached.id, email);
+  return res.json({ message: "Login exitoso (offline)", token, user: { id: cached.id, email } });
 });
 
 module.exports = router;
