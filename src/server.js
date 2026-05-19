@@ -278,16 +278,18 @@ io.on("connection", (socket) => {
     }
     const room = rooms.get(roomStr);
     if (room) {
-      const sortedPlayers = [...room.players].sort((a, b) => {
-        if (b.score === a.score) return a.timeAccumulated - b.timeAccumulated;
-        return b.score - a.score;
-      });
-      room.isGameOver = true;
-      room.finalResults = sortedPlayers;
-      room.isShowingResults = false;
-      room.isAnswering = false;
-      io.to(roomStr).emit("final_results", sortedPlayers);
-      console.log(`Juego terminado en sala ${roomStr}`);
+      if (!room.isGameOver) {
+        const sortedPlayers = [...room.players].sort((a, b) => {
+          if (b.score === a.score) return a.timeAccumulated - b.timeAccumulated;
+          return b.score - a.score;
+        });
+        room.isGameOver = true;
+        room.finalResults = sortedPlayers;
+        room.isShowingResults = false;
+        room.isAnswering = false;
+        console.log(`Juego terminado en sala ${roomStr}`);
+      }
+      io.to(roomStr).emit("final_results", room.finalResults);
     }
   });
 
