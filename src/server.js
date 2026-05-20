@@ -289,16 +289,24 @@ io.on("connection", (socket) => {
         room.isAnswering = false;
         console.log(`Juego terminado en sala ${roomStr}`);
       }
-      const roomSockets = io.sockets.adapter.rooms.get(roomStr);
-      console.log(`Sala ${roomStr}: ${roomSockets ? roomSockets.size : 0} sockets en la sala`);
-      io.to(roomStr).emit("final_results", room.finalResults);
-      // Envío directo a cada jugador como respaldo (por si salieron del room)
-      for (const player of room.players) {
-        if (player.id) {
-          io.to(player.id).emit("final_results", room.finalResults);
-          console.log(`  → directo a ${player.name} (${player.id})`);
+
+      const broadcast = () => {
+        if (!rooms.has(roomStr)) return;
+        const r = rooms.get(roomStr);
+        io.to(roomStr).emit("final_results", r.finalResults);
+        for (const player of r.players) {
+          if (player.id) io.to(player.id).emit("final_results", r.finalResults);
         }
-      }
+      };
+
+      // Emit immediately, then retry every 1 s for 15 s to catch late/reconnecting sockets
+      broadcast();
+      let retries = 0;
+      const retryId = setInterval(() => {
+        retries++;
+        broadcast();
+        if (retries >= 15) clearInterval(retryId);
+      }, 1000);
     }
   });
 
