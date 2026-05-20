@@ -543,6 +543,19 @@ Ejemplo:
   }
 });
 
+// ── Estado del juego (HTTP polling fallback) ──
+app.get('/game-state/:roomCode', (req, res) => {
+  const roomCode = req.params.roomCode?.toString();
+  if (!validateRoomCode(roomCode)) return res.json({ status: 'not_found' });
+  const room = rooms.get(roomCode);
+  if (!room) return res.json({ status: 'not_found' });
+  if (room.isGameOver && room.finalResults) {
+    return res.json({ status: 'over', players: room.finalResults });
+  }
+  if (room.isShowingResults) return res.json({ status: 'results' });
+  return res.json({ status: 'active' });
+});
+
 // ── Health check (keeps Supabase DB active) ──
 const db = require('./db');
 app.get('/health', async (req, res) => {
