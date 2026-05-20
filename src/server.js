@@ -289,7 +289,16 @@ io.on("connection", (socket) => {
         room.isAnswering = false;
         console.log(`Juego terminado en sala ${roomStr}`);
       }
+      const roomSockets = io.sockets.adapter.rooms.get(roomStr);
+      console.log(`Sala ${roomStr}: ${roomSockets ? roomSockets.size : 0} sockets en la sala`);
       io.to(roomStr).emit("final_results", room.finalResults);
+      // Envío directo a cada jugador como respaldo (por si salieron del room)
+      for (const player of room.players) {
+        if (player.id) {
+          io.to(player.id).emit("final_results", room.finalResults);
+          console.log(`  → directo a ${player.name} (${player.id})`);
+        }
+      }
     }
   });
 
