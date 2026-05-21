@@ -299,14 +299,19 @@ io.on("connection", (socket) => {
         }
       };
 
-      // Emit immediately, then retry every 1 s for 15 s to catch late/reconnecting sockets
-      broadcast();
-      let retries = 0;
-      const retryId = setInterval(() => {
-        retries++;
+      // Solo iniciar UN loop de reintento por sala
+      if (!room.broadcastStarted) {
+        room.broadcastStarted = true;
         broadcast();
-        if (retries >= 15) clearInterval(retryId);
-      }, 1000);
+        let retries = 0;
+        const retryId = setInterval(() => {
+          retries++;
+          broadcast();
+          if (retries >= 15) clearInterval(retryId);
+        }, 1000);
+      } else {
+        broadcast();
+      }
     }
   });
 
