@@ -98,6 +98,7 @@ io.on("connection", (socket) => {
       answerCounts: [0, 0, 0, 0],
       hostToken,
       hostSocketId: socket.id,
+      questionHistory: [],
     });
     socket.join(roomCode);
     socket.emit("room_created", { hostToken });
@@ -192,6 +193,17 @@ io.on("connection", (socket) => {
     room.currentTimeLimit = time;
     room.isAnswering = true;
     room.isShowingResults = false;
+    if (!room.questionHistory) room.questionHistory = [];
+    room.questionHistory.push({
+      index: room.questionHistory.length,
+      question: question.question || "",
+      type: question.type,
+      options: question.options,
+      correctAnswer: question.answer,
+      points: question.points || 100,
+      playerAnswers: [],
+      startTime: room.questionStartTime,
+    });
 
     io.to(roomStr).emit("new_question", {
       type:     question.type,
@@ -244,6 +256,11 @@ io.on("connection", (socket) => {
 
       if (isCorrect) {
         player.timeAccumulated += timeTaken;
+      }
+
+      if (room.questionHistory && room.questionHistory.length > 0) {
+        const currentQ = room.questionHistory[room.questionHistory.length - 1];
+        currentQ.playerAnswers.push({ name: playerName, answer, isCorrect, timeTaken, pointsEarned });
       }
 
       io.to(roomStr).emit("player_answered", { playerName });
@@ -559,6 +576,18 @@ app.get('/game-state/:roomCode', (req, res) => {
   }
   if (room.isShowingResults) return res.json({ status: 'results' });
   return res.json({ status: 'active' });
+});
+
+// ── Reporte post-partida ──
+app.get('/reports/:roomCode', (req, res) => {
+  const roomCode = req.params.roomCode?.toString();
+  if (!validateRoomCode(roomCode)) return res.status(400).json({ error: 'Código inválido' });
+  const room = rooms.get(roomCode);
+  if (!room) return res.status(404).json({ error: 'Sala no encontrada' });
+  return res.json({
+    players: room.finalResults || room.players,
+    questions: room.questionHistory || [],
+  });
 });
 
 // ── Health check (keeps Supabase DB active) ──
