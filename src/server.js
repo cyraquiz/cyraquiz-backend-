@@ -5,6 +5,7 @@ const { randomUUID } = require('crypto');
 const authRoutes        = require('./routes/auth');
 const quizRoutes        = require('./routes/quizzes');
 const assignmentRoutes  = require('./routes/assignments');
+const authorization     = require('./middleware/authorization');
 const express = require("express");
 const cors = require("cors");
 const http = require("http");
@@ -17,6 +18,13 @@ const pdf = require("pdf-extraction");
 const OpenAI = require("openai");
 
 const LOCAL_MODE = process.env.LOCAL_MODE === 'true';
+
+// ── Supabase Storage (cloud mode) ──
+let supabaseStorage = null;
+if (!LOCAL_MODE && process.env.SUPABASE_URL && process.env.SUPABASE_KEY) {
+  const { createClient } = require('@supabase/supabase-js');
+  supabaseStorage = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+}
 
 const app = express();
 
@@ -175,6 +183,7 @@ io.on("connection", (socket) => {
         points:   room.currentPoints || 100,
         min:      room.currentMin ?? 0,
         max:      room.currentMax ?? 100,
+        image:    room.currentImage || null,
       });
     }
   });
@@ -205,6 +214,7 @@ io.on("connection", (socket) => {
     room.currentQuestion = question.question || "";
     room.currentMin = question.min ?? 0;
     room.currentMax = question.max ?? 100;
+    room.currentImage = question.image || null;
     room.answerCounts = [0, 0, 0, 0];
     room.questionStartTime = Date.now();
     room.currentTimeLimit = time;
@@ -231,6 +241,7 @@ io.on("connection", (socket) => {
       points:   question.points || 100,
       min:      question.min ?? 0,
       max:      question.max ?? 100,
+      image:    question.image || null,
     });
     console.log(`Pregunta enviada a sala ${roomStr} (Tipo: ${question.type})`);
   });
@@ -651,6 +662,46 @@ Ejemplo:
 
     res.status(500).json({ error: "Error procesando el examen con IA. Intenta de nuevo." });
   }
+});
+
+// ── Subida de imágenes para preguntas ──
+const imageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Tipo de archivo no permitido'), false);
+  },
+});
+
+app.post('/upload-image', authorization, imageUpload.single('image'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No se recibió imagen' });
+  const ext = req.file.mimetype === 'image/jpeg' ? 'jpg'
+    : req.file.mimetype === 'image/png'  ? 'png'
+    : req.file.mimetype === 'image/webp' ? 'webp' : 'gif';
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+
+  if (LOCAL_MODE) {
+    const uploadsDir = path.join(__dirname, '../public/uploads');
+    if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+    fs.writeFileSync(path.join(uploadsDir, filename), req.file.buffer);
+    return res.json({ url: `/uploads/${filename}` });
+  }
+
+  if (!supabaseStorage) return res.status(500).json({ error: 'Almacenamiento no configurado' });
+
+  const { error } = await supabaseStorage.storage
+    .from('quiz-images')
+    .upload(filename, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
+
+  if (error) {
+    console.error('Supabase storage error:', error.message);
+    return res.status(500).json({ error: 'Error al subir imagen: ' + error.message });
+  }
+
+  const { data } = supabaseStorage.storage.from('quiz-images').getPublicUrl(filename);
+  return res.json({ url: data.publicUrl });
 });
 
 // ── Estado del juego (HTTP polling fallback) ──
