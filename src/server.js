@@ -24,6 +24,19 @@ let supabaseStorage = null;
 if (!LOCAL_MODE && process.env.SUPABASE_URL && process.env.SUPABASE_KEY) {
   const { createClient } = require('@supabase/supabase-js');
   supabaseStorage = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+
+  // Auto-create the public bucket if it doesn't exist yet
+  supabaseStorage.storage.createBucket('quiz-images', {
+    public: true,
+    fileSizeLimit: 5 * 1024 * 1024,
+    allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+  }).then(({ error }) => {
+    if (error && !error.message?.includes('already exist') && !error.message?.includes('Duplicate')) {
+      console.error('quiz-images bucket error:', error.message);
+    } else {
+      console.log('Supabase Storage bucket "quiz-images" listo.');
+    }
+  });
 }
 
 const app = express();
