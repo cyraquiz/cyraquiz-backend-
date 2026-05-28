@@ -99,6 +99,9 @@ io.on("connection", (socket) => {
       hostToken,
       hostSocketId: socket.id,
       questionHistory: [],
+      teamMode: false,
+      teams: [],
+      autoAssign: false,
     });
     socket.join(roomCode);
     socket.emit("room_created", { hostToken });
@@ -143,8 +146,22 @@ io.on("connection", (socket) => {
     io.to(roomStr).emit("player_joined", { name: safeName, avatar });
     console.log(`${safeName} entró a la sala ${roomStr}`);
 
+    if (room.teamMode && room.teams.length) {
+      if (room.autoAssign && !existingPlayer) {
+        const smallest = room.teams.reduce((m, t) => t.players.length < m.players.length ? t : m, room.teams[0]);
+        smallest.players.push(safeName);
+        const newP = room.players[room.players.length - 1];
+        newP.teamId    = smallest.id;
+        newP.teamName  = smallest.name;
+        newP.teamColor = smallest.color;
+        io.to(roomStr).emit("team_updated", { teams: room.teams });
+      }
+      socket.emit("teams_configured", { teams: room.teams, autoAssign: room.autoAssign });
+    }
+
     if (room.isGameOver && room.finalResults) {
       socket.emit("final_results", room.finalResults);
+      if (room.teamMode && room.teamResults) socket.emit("team_results", room.teamResults);
     } else if (room.isShowingResults) {
       socket.emit("reveal_results");
     } else if (room.isAnswering && room.currentOptions) {
@@ -274,6 +291,53 @@ io.on("connection", (socket) => {
     }
   });
 
+  // CONFIGURAR EQUIPOS (host)
+  socket.on("enable_teams", ({ roomCode, hostToken, teams, autoAssign }) => {
+    const roomStr = roomCode?.toString();
+    if (!validateRoomCode(roomStr) || !validateHostToken(roomStr, hostToken)) {
+      socket.emit("error", "No autorizado");
+      return;
+    }
+    const room = rooms.get(roomStr);
+    if (!room) return;
+    room.teamMode = true;
+    room.autoAssign = !!autoAssign;
+    room.teams = teams.map(t => ({ ...t, players: [] }));
+
+    if (autoAssign && room.players.length > 0) {
+      room.players.forEach((p, i) => {
+        const team = room.teams[i % room.teams.length];
+        team.players.push(p.name);
+        p.teamId    = team.id;
+        p.teamName  = team.name;
+        p.teamColor = team.color;
+      });
+    }
+
+    io.to(roomStr).emit("teams_configured", { teams: room.teams, autoAssign: room.autoAssign });
+    console.log(`Equipos activados en sala ${roomStr}`);
+  });
+
+  // UNIRSE A UN EQUIPO (estudiante)
+  socket.on("join_team", ({ roomCode, playerName, teamId }) => {
+    const roomStr = roomCode?.toString();
+    if (!validateRoomCode(roomStr)) return;
+    const room = rooms.get(roomStr);
+    if (!room || !room.teamMode) return;
+    const player = room.players.find(p => p.name === playerName);
+    if (!player) return;
+
+    room.teams.forEach(t => { t.players = t.players.filter(n => n !== playerName); });
+    const team = room.teams.find(t => t.id === teamId);
+    if (team) {
+      team.players.push(playerName);
+      player.teamId    = teamId;
+      player.teamName  = team.name;
+      player.teamColor = team.color;
+    }
+    io.to(roomStr).emit("team_updated", { teams: room.teams });
+  });
+
   socket.on("show_results", ({ roomCode, hostToken }) => {
     const roomStr = roomCode?.toString();
     if (!validateRoomCode(roomStr) || !validateHostToken(roomStr, hostToken)) {
@@ -304,6 +368,24 @@ io.on("connection", (socket) => {
         room.finalResults = sortedPlayers;
         room.isShowingResults = false;
         room.isAnswering = false;
+
+        if (room.teamMode && room.teams.length > 0) {
+          room.teamResults = room.teams.map(team => {
+            const members = team.players
+              .map(name => room.players.find(p => p.name === name))
+              .filter(Boolean);
+            const totalScore = members.reduce((s, p) => s + (p.score || 0), 0);
+            const avgScore   = members.length ? Math.round(totalScore / members.length) : 0;
+            const avgTime    = members.length
+              ? Math.round(members.reduce((s, p) => s + (p.timeAccumulated || 0), 0) / members.length) : 0;
+            return {
+              id: team.id, name: team.name, color: team.color,
+              avgScore, totalScore, avgTime,
+              members: members.map(p => ({ name: p.name, avatar: p.avatar, score: p.score })),
+            };
+          }).sort((a, b) => b.avgScore !== a.avgScore ? b.avgScore - a.avgScore : a.avgTime - b.avgTime);
+        }
+
         console.log(`Juego terminado en sala ${roomStr}`);
       }
 
@@ -313,6 +395,12 @@ io.on("connection", (socket) => {
         io.to(roomStr).emit("final_results", r.finalResults);
         for (const player of r.players) {
           if (player.id) io.to(player.id).emit("final_results", r.finalResults);
+        }
+        if (r.teamMode && r.teamResults) {
+          io.to(roomStr).emit("team_results", r.teamResults);
+          for (const player of r.players) {
+            if (player.id) io.to(player.id).emit("team_results", r.teamResults);
+          }
         }
       };
 
@@ -572,7 +660,7 @@ app.get('/game-state/:roomCode', (req, res) => {
   const room = rooms.get(roomCode);
   if (!room) return res.json({ status: 'not_found' });
   if (room.isGameOver && room.finalResults) {
-    return res.json({ status: 'over', players: room.finalResults });
+    return res.json({ status: 'over', players: room.finalResults, teams: room.teamResults || null });
   }
   if (room.isShowingResults) return res.json({ status: 'results' });
   return res.json({ status: 'active' });
