@@ -94,4 +94,39 @@ router.post('/login', async (req, res) => {
   return res.json({ message: "Login exitoso (offline)", token, user: { id: cached.id, email } });
 });
 
+router.post('/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'Email requerido' });
+
+  try {
+    await supabaseClient().auth.resetPasswordForEmail(email, {
+      redirectTo: 'https://cyraquiz-frontend.vercel.app/reset-password',
+    });
+    // Siempre retorna éxito para evitar enumeración de emails
+    res.json({ message: 'Si el correo existe, recibirás un enlace de recuperación en tu bandeja de entrada.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al procesar la solicitud' });
+  }
+});
+
+router.post('/update-password', async (req, res) => {
+  const { access_token, new_password } = req.body;
+  if (!access_token || !new_password) return res.status(400).json({ error: 'Datos incompletos' });
+  if (new_password.length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+
+  try {
+    const { data: { user }, error: authError } = await supabaseClient().auth.getUser(access_token);
+    if (authError || !user) return res.status(400).json({ error: 'Enlace inválido o expirado' });
+
+    const { error } = await supabaseClient().auth.admin.updateUserById(user.id, { password: new_password });
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.json({ message: 'Contraseña actualizada correctamente' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al actualizar la contraseña' });
+  }
+});
+
 module.exports = router;
