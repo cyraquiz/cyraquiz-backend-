@@ -43,8 +43,9 @@ if (!LOCAL_MODE && process.env.SUPABASE_URL && process.env.SUPABASE_KEY) {
 const app = express();
 
 app.use(helmet({
-  contentSecurityPolicy: false, // API-only — no HTML served
+  contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: { policy: "cross-origin" }, // permite fetch desde el frontend
 }));
 
 const allowedOrigins = [
