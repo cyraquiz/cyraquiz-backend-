@@ -8,6 +8,7 @@ const assignmentRoutes  = require('./routes/assignments');
 const authorization     = require('./middleware/authorization');
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
 const http = require("http");
 const { Server } = require("socket.io");
 const multer = require("multer");
@@ -40,6 +41,11 @@ if (!LOCAL_MODE && process.env.SUPABASE_URL && process.env.SUPABASE_KEY) {
 }
 
 const app = express();
+
+app.use(helmet({
+  contentSecurityPolicy: false, // API-only — no HTML served
+  crossOriginEmbedderPolicy: false,
+}));
 
 const allowedOrigins = [
   "https://cyraquiz.vercel.app",
