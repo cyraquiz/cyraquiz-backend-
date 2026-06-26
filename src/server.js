@@ -238,6 +238,7 @@ io.on("connection", (socket) => {
     room.currentMax = question.max ?? 100;
     room.currentImage = question.image || null;
     room.answerCounts = [0, 0, 0, 0];
+    room.textAnswers = [];
     room.questionStartTime = Date.now();
     room.currentTimeLimit = time;
     room.isAnswering = true;
@@ -289,6 +290,12 @@ io.on("connection", (socket) => {
         });
 
         io.to(roomStr).emit("update_stats", room.answerCounts);
+      }
+
+      if (room.currentQuestionType === "text" && typeof answer === "string") {
+        if (!room.textAnswers) room.textAnswers = [];
+        room.textAnswers.push(answer.trim());
+        io.to(roomStr).emit("update_text_answers", room.textAnswers);
       }
 
       let isCorrect = false;
