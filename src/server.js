@@ -464,6 +464,12 @@ io.on("connection", (socket) => {
     console.log(`Partida cancelada en sala ${roomStr}`);
   });
 
+  socket.on("send_reaction", ({ roomCode, emoji }) => {
+    const roomStr = roomCode?.toString();
+    if (!validateRoomCode(roomStr)) return;
+    socket.to(roomStr).emit("reaction", { emoji });
+  });
+
   socket.on("disconnect", () => {
     console.log("Usuario desconectado:", socket.id);
   });
