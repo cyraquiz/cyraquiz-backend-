@@ -256,15 +256,16 @@ io.on("connection", (socket) => {
     });
 
     io.to(roomStr).emit("new_question", {
-      type:     question.type,
-      question: question.question || "",
-      options:  question.options,
-      answer:   question.answer,
-      time:     time,
-      points:   question.points || 100,
-      min:      question.min ?? 0,
-      max:      question.max ?? 100,
-      image:    question.image || null,
+      type:           question.type,
+      question:       question.question || "",
+      options:        question.options,
+      answer:         question.answer,
+      time:           time,
+      points:         question.points || 100,
+      min:            question.min ?? 0,
+      max:            question.max ?? 100,
+      image:          question.image || null,
+      powerUpsEnabled: !!room.powerUpsEnabled,
     });
     console.log(`Pregunta enviada a sala ${roomStr} (Tipo: ${question.type})`);
   });
@@ -308,7 +309,19 @@ io.on("connection", (socket) => {
       }
 
       const timeTaken = Date.now() - room.questionStartTime;
-      const pointsEarned = isCorrect ? room.currentPoints : 0;
+      let pointsEarned = isCorrect ? room.currentPoints : 0;
+
+      if (room.powerUpsEnabled) {
+        if (isCorrect && player.doubleActive) {
+          pointsEarned *= 2;
+          player.doubleActive = false;
+        }
+        if (!isCorrect && player.shieldActive) {
+          pointsEarned = Math.floor(room.currentPoints * 0.5);
+          player.shieldActive = false;
+        }
+      }
+
       player.score += pointsEarned;
 
       if (isCorrect) {
@@ -469,6 +482,41 @@ io.on("connection", (socket) => {
     io.to(roomStr).emit("game_cancelled");
     rooms.delete(roomStr);
     console.log(`Partida cancelada en sala ${roomStr}`);
+  });
+
+  socket.on("enable_powerups", ({ roomCode, hostToken }) => {
+    const roomStr = roomCode?.toString();
+    if (!validateRoomCode(roomStr) || !validateHostToken(roomStr, hostToken)) return;
+    const room = rooms.get(roomStr);
+    if (!room) return;
+    room.powerUpsEnabled = true;
+    console.log(`Power-ups activados en sala ${roomStr}`);
+  });
+
+  socket.on("use_powerup", ({ roomCode, playerName, type }) => {
+    const roomStr = roomCode?.toString();
+    if (!validateRoomCode(roomStr)) return;
+    const room = rooms.get(roomStr);
+    if (!room || !room.powerUpsEnabled) return;
+    const player = room.players.find(p => p.name === playerName);
+    if (!player) return;
+
+    if (type === "fifty_fifty") {
+      const options = room.currentOptions || [];
+      const correct = room.currentCorrectAnswer;
+      const wrongIdxs = options
+        .map((opt, i) => ({ opt, i }))
+        .filter(({ opt }) => Array.isArray(correct) ? !correct.includes(opt) : opt !== correct)
+        .map(({ i }) => i);
+      const eliminated = wrongIdxs.sort(() => Math.random() - 0.5).slice(0, 2);
+      socket.emit("powerup_applied", { type: "fifty_fifty", eliminated });
+    } else if (type === "double") {
+      player.doubleActive = true;
+      socket.emit("powerup_applied", { type: "double" });
+    } else if (type === "shield") {
+      player.shieldActive = true;
+      socket.emit("powerup_applied", { type: "shield" });
+    }
   });
 
   socket.on("send_reaction", ({ roomCode, emoji }) => {
