@@ -5,12 +5,13 @@ const authorization = require("../middleware/authorization");
 
 const LOCAL_MODE = process.env.LOCAL_MODE === 'true';
 
-// Auto-migration: add public bank columns if they don't exist yet
+// Auto-migration: add public bank columns + video_url if they don't exist yet
 if (!LOCAL_MODE) {
   db.query(`
     ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS is_public    BOOLEAN      DEFAULT false;
     ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS author_email TEXT;
     ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
+    ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS video_url    TEXT;
   `).catch(err => console.error('Migration quizzes:', err.message));
 }
 
@@ -63,7 +64,7 @@ router.get("/:id", async (req, res) => {
     const quiz = await db.query("SELECT * FROM quizzes WHERE id = $1", [req.params.id]);
     if (quiz.rows.length === 0) return res.status(404).json("Quiz no encontrado");
     const data = quiz.rows[0];
-    res.json({ id: data.id, title: data.title, description: data.description, questionsData: data.questions });
+    res.json({ id: data.id, title: data.title, description: data.description, questionsData: data.questions, video_url: data.video_url });
   } catch (err) {
     console.error(err.message);
     res.status(500).send("Error del servidor");
@@ -76,10 +77,10 @@ router.post("/", authorization, async (req, res) => {
     return res.status(503).json({ error: "Creación de quizzes no disponible sin internet. Crea quizzes desde cyraquiz.vercel.app y se sincronizarán al iniciar sesión." });
   }
   try {
-    const { title, description, questions } = req.body;
+    const { title, description, questions, videoUrl } = req.body;
     const newQuiz = await db.query(
-      "INSERT INTO quizzes (user_id, title, description, questions) VALUES ($1, $2, $3, $4) RETURNING *",
-      [req.user.id, title, description || "", JSON.stringify(questions)]
+      "INSERT INTO quizzes (user_id, title, description, questions, video_url) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+      [req.user.id, title, description || "", JSON.stringify(questions), videoUrl || null]
     );
     console.log("Quiz guardado:", newQuiz.rows[0].title);
     res.json(newQuiz.rows[0]);
@@ -95,10 +96,10 @@ router.put("/:id", authorization, async (req, res) => {
     return res.status(503).json({ error: "Edición de quizzes no disponible sin internet." });
   }
   try {
-    const { title, questions } = req.body;
+    const { title, questions, videoUrl } = req.body;
     const updated = await db.query(
-      "UPDATE quizzes SET title = $1, questions = $2 WHERE id = $3 AND user_id = $4 RETURNING *",
-      [title, JSON.stringify(questions), req.params.id, req.user.id]
+      "UPDATE quizzes SET title = $1, questions = $2, video_url = $3 WHERE id = $4 AND user_id = $5 RETURNING *",
+      [title, JSON.stringify(questions), videoUrl || null, req.params.id, req.user.id]
     );
     if (updated.rows.length === 0) return res.status(404).json("No se encontró el quiz o no es tuyo");
     console.log("Quiz actualizado:", updated.rows[0].title);
