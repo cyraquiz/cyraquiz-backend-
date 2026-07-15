@@ -242,6 +242,7 @@ io.on("connection", (socket) => {
     room.currentImage = question.image || null;
     room.answerCounts = [0, 0, 0, 0];
     room.textAnswers = [];
+    room.drawings    = [];
     room.questionStartTime = Date.now();
     room.currentTimeLimit = time;
     room.isAnswering = true;
@@ -495,6 +496,30 @@ io.on("connection", (socket) => {
     if (!room) return;
     room.powerUpsEnabled = true;
     console.log(`Power-ups activados en sala ${roomStr}`);
+  });
+
+  socket.on("submit_draw", ({ roomCode, playerName, avatar, imageData }) => {
+    const roomStr = roomCode?.toString();
+    if (!validateRoomCode(roomStr)) return;
+    const room = rooms.get(roomStr);
+    if (!room || !room.isAnswering) return;
+
+    const safeName = sanitizeName(playerName);
+    const player   = room.players.find(p => p.name === safeName);
+    if (!player || player.hasAnswered) return;
+    player.hasAnswered = true;
+
+    const drawing = { playerName: safeName, avatar: avatar || "", imageData };
+    if (!room.drawings) room.drawings = [];
+    room.drawings.push(drawing);
+
+    // Notify host of new drawing
+    io.to(room.hostSocketId).emit("drawing_received", drawing);
+    // Notify room of answer count (triggers host counter)
+    io.to(roomStr).emit("player_answered", { playerName: safeName });
+    // Confirm submission to the student (0 points — no auto-grading)
+    const score = player.score || 0;
+    socket.emit("answer_result", { isCorrect: false, pointsEarned: 0, totalScore: score });
   });
 
   socket.on("enable_exam", ({ roomCode, hostToken }) => {
