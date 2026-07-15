@@ -5,8 +5,11 @@ const jwt      = require('jsonwebtoken');
 const localDb  = require('../db/local');
 require('dotenv').config();
 
-const LOCAL_MODE   = process.env.LOCAL_MODE === 'true';
-const LOCAL_SECRET = process.env.LOCAL_JWT_SECRET || 'cyraquiz-local-offline-secret';
+const LOCAL_MODE      = process.env.LOCAL_MODE === 'true';
+const LOCAL_SECRET    = process.env.LOCAL_JWT_SECRET || 'cyraquiz-local-offline-secret';
+const STUDENT_SECRET  = process.env.STUDENT_JWT_SECRET || 'cyraquiz-student-secret-2026';
+
+const db = require('../db');
 
 function makeLocalToken(userId, email) {
   return jwt.sign({ userId, email }, LOCAL_SECRET, { expiresIn: '12h' });
@@ -126,6 +129,71 @@ router.post('/update-password', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al actualizar la contraseña' });
+  }
+});
+
+// ─── Estudiante: Registro ────────────────────────────
+router.post('/student-register', async (req, res) => {
+  const { displayName, email, password } = req.body;
+  if (!displayName || !email || !password)
+    return res.status(400).json({ error: 'Datos incompletos' });
+  if (password.length < 6)
+    return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+  try {
+    const existing = await db.query(
+      'SELECT id FROM student_profiles WHERE email = $1',
+      [email.toLowerCase()]
+    );
+    if (existing.rows.length)
+      return res.status(400).json({ error: 'Este correo ya está registrado' });
+
+    const hash = await bcrypt.hash(password, 10);
+    const { rows } = await db.query(
+      `INSERT INTO student_profiles (email, display_name, password_hash)
+       VALUES ($1, $2, $3)
+       RETURNING id, email, display_name`,
+      [email.toLowerCase(), displayName.trim(), hash]
+    );
+    const student = rows[0];
+    const token = jwt.sign(
+      { studentId: student.id, email: student.email, role: 'student' },
+      STUDENT_SECRET,
+      { expiresIn: '30d' }
+    );
+    res.json({ token, displayName: student.display_name });
+  } catch (err) {
+    console.error('student-register:', err.message);
+    res.status(500).json({ error: 'Error al registrar estudiante' });
+  }
+});
+
+// ─── Estudiante: Login ───────────────────────────────
+router.post('/student-login', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password)
+    return res.status(400).json({ error: 'Datos incompletos' });
+  try {
+    const { rows } = await db.query(
+      'SELECT * FROM student_profiles WHERE email = $1',
+      [email.toLowerCase()]
+    );
+    if (!rows.length)
+      return res.status(400).json({ error: 'Credenciales incorrectas' });
+
+    const student = rows[0];
+    const match = await bcrypt.compare(password, student.password_hash);
+    if (!match)
+      return res.status(400).json({ error: 'Credenciales incorrectas' });
+
+    const token = jwt.sign(
+      { studentId: student.id, email: student.email, role: 'student' },
+      STUDENT_SECRET,
+      { expiresIn: '30d' }
+    );
+    res.json({ token, displayName: student.display_name });
+  } catch (err) {
+    console.error('student-login:', err.message);
+    res.status(500).json({ error: 'Error al iniciar sesión' });
   }
 });
 

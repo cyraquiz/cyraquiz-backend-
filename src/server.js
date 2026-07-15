@@ -5,7 +5,9 @@ const { randomUUID } = require('crypto');
 const authRoutes        = require('./routes/auth');
 const quizRoutes        = require('./routes/quizzes');
 const assignmentRoutes  = require('./routes/assignments');
+const studentRoutes     = require('./routes/student');
 const authorization     = require('./middleware/authorization');
+const studentAuth       = require('./middleware/studentAuth');
 const express = require("express");
 const cors = require("cors");
 const http = require("http");
@@ -76,6 +78,7 @@ app.use(express.json());
 app.use('/auth', authRoutes);
 app.use('/quizzes', quizRoutes);
 app.use('/assignments', assignmentRoutes);
+app.use('/student', studentAuth, studentRoutes);
 
 const deepseek = new OpenAI({
   baseURL: 'https://api.deepseek.com',
@@ -266,6 +269,7 @@ io.on("connection", (socket) => {
       max:            question.max ?? 100,
       image:          question.image || null,
       powerUpsEnabled: !!room.powerUpsEnabled,
+      examMode:        !!room.examMode,
     });
     console.log(`Pregunta enviada a sala ${roomStr} (Tipo: ${question.type})`);
   });
@@ -491,6 +495,15 @@ io.on("connection", (socket) => {
     if (!room) return;
     room.powerUpsEnabled = true;
     console.log(`Power-ups activados en sala ${roomStr}`);
+  });
+
+  socket.on("enable_exam", ({ roomCode, hostToken }) => {
+    const roomStr = roomCode?.toString();
+    if (!validateRoomCode(roomStr) || !validateHostToken(roomStr, hostToken)) return;
+    const room = rooms.get(roomStr);
+    if (!room) return;
+    room.examMode = true;
+    console.log(`Modo Examen activado en sala ${roomStr}`);
   });
 
   socket.on("use_powerup", ({ roomCode, playerName, type }) => {
