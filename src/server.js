@@ -118,6 +118,20 @@ function validateRoomCode(code) {
   return typeof code === 'string' && /^\d{6}$/.test(code);
 }
 
+function generateBracket(players) {
+  const shuffled = [...players].sort(() => Math.random() - 0.5);
+  const matches = [];
+  for (let i = 0; i + 1 < shuffled.length; i += 2) {
+    matches.push({ p1: shuffled[i].name, p2: shuffled[i + 1].name,
+                   av1: shuffled[i].avatar, av2: shuffled[i + 1].avatar });
+  }
+  if (shuffled.length % 2 === 1) {
+    const last = shuffled[shuffled.length - 1];
+    matches.push({ p1: last.name, p2: null, av1: last.avatar, av2: null });
+  }
+  return matches;
+}
+
 io.on("connection", (socket) => {
   console.log("Usuario conectado:", socket.id);
 
@@ -328,6 +342,10 @@ io.on("connection", (socket) => {
       }
 
       player.score += pointsEarned;
+      if (room.tournamentMode) {
+        if (!room.roundScores) room.roundScores = {};
+        room.roundScores[playerName] = (room.roundScores[playerName] || 0) + pointsEarned;
+      }
 
       if (isCorrect) {
         player.timeAccumulated += timeTaken;
@@ -394,6 +412,133 @@ io.on("connection", (socket) => {
       player.teamColor = team.color;
     }
     io.to(roomStr).emit("team_updated", { teams: room.teams });
+  });
+
+  // ACTIVAR TORNEO (host)
+  socket.on("enable_tournament", ({ roomCode, hostToken, questionsPerRound }) => {
+    const roomStr = roomCode?.toString();
+    if (!validateRoomCode(roomStr) || !validateHostToken(roomStr, hostToken)) {
+      socket.emit("error", "No autorizado");
+      return;
+    }
+    const room = rooms.get(roomStr);
+    if (!room) return;
+    room.tournamentMode = true;
+    room.questionsPerRound = questionsPerRound || 3;
+    room.currentRound = 1;
+    room.roundScores = {};
+    room.activePlayers = room.players.map(p => p.name);
+    room.bracket = generateBracket(room.players);
+    // Notify each student of their opponent
+    room.bracket.forEach(match => {
+      const p1 = room.players.find(p => p.name === match.p1);
+      const p2 = match.p2 ? room.players.find(p => p.name === match.p2) : null;
+      if (p1?.id) io.to(p1.id).emit("tournament_opponent", {
+        opponent: p2 ? { name: p2.name, avatar: p2.avatar } : null,
+        round: 1,
+      });
+      if (p2?.id) io.to(p2.id).emit("tournament_opponent", {
+        opponent: { name: p1.name, avatar: p1.avatar },
+        round: 1,
+      });
+    });
+    socket.emit("tournament_bracket", {
+      bracket: room.bracket,
+      round: 1,
+      questionsPerRound: room.questionsPerRound,
+      activePlayers: room.activePlayers,
+    });
+    console.log(`Torneo activado en sala ${roomStr} (${room.questionsPerRound} preguntas/ronda)`);
+  });
+
+  // FIN DE RONDA (host lo emite cuando se jugaron questionsPerRound preguntas)
+  socket.on("end_round", ({ roomCode, hostToken }) => {
+    const roomStr = roomCode?.toString();
+    if (!validateRoomCode(roomStr) || !validateHostToken(roomStr, hostToken)) {
+      socket.emit("error", "No autorizado");
+      return;
+    }
+    const room = rooms.get(roomStr);
+    if (!room || !room.tournamentMode) return;
+
+    const scores = room.roundScores || {};
+    const advancing = [];
+    const eliminated = [];
+    const matchResults = room.bracket.map(match => {
+      const s1 = scores[match.p1] || 0;
+      const s2 = match.p2 ? (scores[match.p2] || 0) : -1;
+      const winner = (s2 < 0 || s1 >= s2) ? match.p1 : match.p2;
+      const loser  = winner === match.p1 ? match.p2 : match.p1;
+      advancing.push(winner);
+      if (loser) eliminated.push(loser);
+      return { p1: match.p1, av1: match.av1, score1: s1,
+               p2: match.p2, av2: match.av2, score2: s2 < 0 ? null : s2,
+               winner };
+    });
+
+    // Notify students of their result
+    matchResults.forEach(m => {
+      const sendResult = (name, result) => {
+        const p = room.players.find(pl => pl.name === name);
+        if (p?.id) io.to(p.id).emit("tournament_round_result", { result, round: room.currentRound, matchResult: m });
+      };
+      sendResult(m.p1, m.winner === m.p1 ? "advancing" : "eliminated");
+      if (m.p2) sendResult(m.p2, m.winner === m.p2 ? "advancing" : "eliminated");
+    });
+
+    // Build next round bracket from advancing players
+    const advancingPlayers = advancing.map(name => room.players.find(p => p.name === name)).filter(Boolean);
+    const nextBracket = advancingPlayers.length > 1 ? generateBracket(advancingPlayers) : [];
+
+    // Store updated tournament state (but don't advance round yet — wait for start_next_round)
+    room._pendingNextBracket = nextBracket;
+    room._pendingAdvancing   = advancing;
+    room._pendingEliminated  = eliminated;
+
+    socket.emit("round_over", {
+      round: room.currentRound,
+      matchResults,
+      advancing,
+      eliminated,
+      nextBracket,
+      isChampion: advancing.length === 1,
+      champion:   advancing.length === 1 ? advancing[0] : null,
+    });
+    console.log(`Ronda ${room.currentRound} terminada en sala ${roomStr}`);
+  });
+
+  // INICIAR SIGUIENTE RONDA (host)
+  socket.on("start_next_round", ({ roomCode, hostToken }) => {
+    const roomStr = roomCode?.toString();
+    if (!validateRoomCode(roomStr) || !validateHostToken(roomStr, hostToken)) {
+      socket.emit("error", "No autorizado");
+      return;
+    }
+    const room = rooms.get(roomStr);
+    if (!room || !room.tournamentMode) return;
+    room.currentRound++;
+    room.roundScores = {};
+    room.bracket = room._pendingNextBracket || [];
+    room.activePlayers = room._pendingAdvancing || [];
+    // Notify each student of their new opponent
+    room.bracket.forEach(match => {
+      const p1 = room.players.find(p => p.name === match.p1);
+      const p2 = match.p2 ? room.players.find(p => p.name === match.p2) : null;
+      if (p1?.id) io.to(p1.id).emit("tournament_opponent", {
+        opponent: p2 ? { name: p2.name, avatar: p2.avatar } : null,
+        round: room.currentRound,
+      });
+      if (p2?.id) io.to(p2.id).emit("tournament_opponent", {
+        opponent: { name: p1.name, avatar: p1.avatar },
+        round: room.currentRound,
+      });
+    });
+    socket.emit("tournament_next_round", {
+      bracket: room.bracket,
+      round: room.currentRound,
+      activePlayers: room.activePlayers,
+    });
+    console.log(`Siguiente ronda (${room.currentRound}) iniciada en sala ${roomStr}`);
   });
 
   socket.on("show_results", ({ roomCode, hostToken }) => {
