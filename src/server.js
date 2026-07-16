@@ -715,11 +715,16 @@ io.on("connection", (socket) => {
 
 /* ── Generación IA desde tema / texto / URL ── */
 app.post('/generate-text', async (req, res) => {
-  const { mode, content } = req.body;
+  const { mode, content, count, types } = req.body;
 
   if (!mode || !content || content.trim().length < 3) {
     return res.status(400).json({ error: "Falta el contenido." });
   }
+
+  const numQuestions = Math.min(30, Math.max(1, parseInt(count) || 10));
+  const allowedTypes = Array.isArray(types) && types.length > 0
+    ? types.filter(t => ["single","multi","tf","poll","text"].includes(t))
+    : ["single", "multi", "tf"];
 
   let sourceText = null;
 
@@ -767,12 +772,23 @@ app.post('/generate-text', async (req, res) => {
     ? `Genera preguntas sobre el siguiente tema: "${content.trim()}"\n\n`
     : '';
 
-  const prompt = `Actúa como un profesor experto. ${sourceSection}${topicSection}Genera EXACTAMENTE 20 preguntas variadas. Mezcla los tipos como consideres más adecuado para evaluar el contenido.
+  const typeDescriptions = {
+    single: '"single": 4 opciones, "answer" es un string con la opción correcta.',
+    multi:  '"multi": 4 opciones, EXACTAMENTE 2 correctas, "answer" es un array con las dos opciones correctas.',
+    tf:     '"tf": "options" debe ser exactamente ["Verdadero","Falso"], "answer" es un string.',
+    poll:   '"poll": pregunta de opinión, 4 opciones, "answer" es un string con la opción más esperada (puede ser subjetivo).',
+    text:   '"text": pregunta de respuesta abierta, "options" es un array vacío [], "answer" es un string con la respuesta modelo.',
+  };
 
-TIPOS DE PREGUNTA:
-- "single": 4 opciones, "answer" es un string con la opción correcta.
-- "multi": 4 opciones, EXACTAMENTE 2 correctas, "answer" es un array con las dos opciones correctas.
-- "tf": "options" debe ser exactamente ["Verdadero","Falso"], "answer" es un string.
+  const typeList = allowedTypes.map(t => `- ${typeDescriptions[t]}`).join('\n');
+  const typeInstruction = allowedTypes.length === 1
+    ? `Usa ÚNICAMENTE el tipo "${allowedTypes[0]}".`
+    : `Usa ÚNICAMENTE estos tipos: ${allowedTypes.map(t => `"${t}"`).join(', ')}. Mezcla los tipos de forma equilibrada.`;
+
+  const prompt = `Actúa como un profesor experto. ${sourceSection}${topicSection}Genera EXACTAMENTE ${numQuestions} preguntas. ${typeInstruction}
+
+TIPOS DE PREGUNTA DISPONIBLES:
+${typeList}
 
 Incluye también "time" (entre 15 y 60, en segundos) y "points" (50, 100, 200 o 500) según la dificultad.
 
