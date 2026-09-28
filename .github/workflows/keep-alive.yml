@@ -1,0 +1,60 @@
+name: 🫀 Keep Backend Alive
+
+on:
+  schedule:
+    # Cada 14 minutos (Render duerme tras 15 min de inactividad en plan free)
+    - cron: '*/14 * * * *'
+  workflow_dispatch: # Permite ejecutarlo manualmente desde GitHub
+
+jobs:
+  ping:
+    name: Ping CYRAQuiz Backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # Render puede tardar hasta ~6 min en cold start
+
+    steps:
+      - name: 🏓 Ping /health con reintentos para cold start largo
+        run: |
+          echo "⏰ $(date -u) — Haciendo ping al backend..."
+
+          MAX_ATTEMPTS=24   # 24 intentos x 20s = 8 minutos máximo
+          ATTEMPT=0
+          SUCCESS=false
+
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "🔄 Intento $ATTEMPT/$MAX_ATTEMPTS..."
+
+            HTTP_CODE=$(curl -s -o /tmp/response.json -w "%{http_code}" \
+              --max-time 15 \
+              "https://cyraquiz-backend.onrender.com/health" 2>/dev/null || echo "000")
+
+            echo "   HTTP Status: $HTTP_CODE"
+
+            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+              echo "✅ Backend despierto! $(cat /tmp/response.json)"
+              SUCCESS=true
+              break
+            elif [ "$HTTP_CODE" -ge 500 ] && [ "$HTTP_CODE" -lt 600 ]; then
+              # 5xx puede significar que despertó pero la DB aún está conectándose
+              echo "⚠️  Backend respondió con $HTTP_CODE (probablemente DB aún conectándose)"
+              echo "   Body: $(cat /tmp/response.json)"
+              SUCCESS=true  # El servidor sí está vivo, la DB se recupera sola
+              break
+            fi
+
+            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+              echo "   Esperando 20s antes del siguiente intento..."
+              sleep 20
+            fi
+          done
+
+          if [ "$SUCCESS" = false ]; then
+            echo "❌ Backend no respondió tras $MAX_ATTEMPTS intentos (~8 min)"
+            exit 1
+          fi
+
+      - name: 📊 Reportar resultado
+        if: always()
+        run: |
+          echo "Ping completado a las $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
