@@ -24,6 +24,11 @@ router.post('/register', async (req, res) => {
   if (LOCAL_MODE) {
     return res.status(503).json({ error: "El registro no está disponible en modo local. Crea tu cuenta desde cyraquiz.vercel.app." });
   }
+  // Ensure Supabase credentials are present
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
+    console.warn('Supabase env missing – registration unavailable');
+    return res.status(503).json({ error: 'Servicio de registro no está configurado. Contacta al administrador.' });
+  }
   const { email, password } = req.body;
   try {
     const { data, error } = await supabaseClient().auth.admin.createUser({ email, password, email_confirm: true });
