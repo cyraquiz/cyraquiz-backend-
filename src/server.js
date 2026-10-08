@@ -67,8 +67,13 @@ app.use(cors(
     ? { origin: true, methods: ["GET", "POST", "PUT", "DELETE"], credentials: true }
     : {
         origin: (origin, callback) => {
-          if (!origin || allowedOrigins.includes(origin)) callback(null, true);
-          else callback(new Error("Not allowed by CORS"));
+          // Allow empty origin (e.g., server‑to‑server) or exact matches
+          if (!origin) return callback(null, true);
+          if (allowedOrigins.includes(origin)) return callback(null, true);
+          // In production, accept any sub‑domain of vercel.app
+          if (process.env.NODE_ENV === "production" && origin.endsWith(".vercel.app"))
+            return callback(null, true);
+          return callback(new Error("Not allowed by CORS"));
         },
         methods: ["GET", "POST", "PUT", "DELETE"],
         credentials: true,
