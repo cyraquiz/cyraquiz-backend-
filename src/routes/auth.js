@@ -199,4 +199,22 @@ router.post('/student-login', async (req, res) => {
   }
 });
 
+// ─── Admin: borrar usuario por email (protegido con ADMIN_SECRET) ─────────────
+router.delete('/admin/user', async (req, res) => {
+  const secret = req.headers['x-admin-secret'];
+  if (!secret || secret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: 'No autorizado' });
+  }
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'Email requerido' });
+  try {
+    const { rowCount } = await db.query('DELETE FROM users WHERE email = $1', [email.toLowerCase()]);
+    if (!rowCount) return res.status(404).json({ error: 'Usuario no encontrado' });
+    res.json({ message: `Usuario ${email} eliminado` });
+  } catch (err) {
+    console.error('admin delete user:', err.message);
+    res.status(500).json({ error: 'Error al eliminar usuario' });
+  }
+});
+
 module.exports = router;
