@@ -1054,7 +1054,42 @@ async function startupSync() {
 
 const PORT = process.env.PORT || 4000;
 
+// ── Auto-migración: crea tablas si no existen ─────────────────────────────────
+async function runMigrations() {
+  const db = require('./db');
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id            SERIAL PRIMARY KEY,
+        email         TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        created_at    TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        token      TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL
+      )
+    `);
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS student_profiles (
+        id            SERIAL PRIMARY KEY,
+        email         TEXT UNIQUE NOT NULL,
+        display_name  TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        created_at    TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    console.log('✓ Migraciones aplicadas correctamente');
+  } catch (err) {
+    console.error('✗ Error en migraciones:', err.message);
+  }
+}
+
 server.listen(PORT, "0.0.0.0", async () => {
+  await runMigrations();
   if (LOCAL_MODE) {
     const ip  = getLocalIP();
     const url = `http://${ip}:${PORT}`;
@@ -1072,3 +1107,4 @@ server.listen(PORT, "0.0.0.0", async () => {
     console.log(`Server listening on port ${PORT}`);
   }
 });
+
