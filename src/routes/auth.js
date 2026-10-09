@@ -2,148 +2,144 @@ const express  = require('express');
 const router   = express.Router();
 const bcrypt   = require('bcryptjs');
 const jwt      = require('jsonwebtoken');
-const localDb  = require('../db/local');
+const crypto   = require('crypto');
+const db       = require('../db');
+
 require('dotenv').config();
 
-const LOCAL_MODE      = process.env.LOCAL_MODE === 'true';
-const LOCAL_SECRET    = process.env.LOCAL_JWT_SECRET || 'cyraquiz-local-offline-secret';
-const STUDENT_SECRET  = process.env.STUDENT_JWT_SECRET || 'cyraquiz-student-secret-2026';
+const JWT_SECRET     = process.env.JWT_SECRET     || 'cyraquiz-secret-2026';
+const LOCAL_SECRET   = process.env.LOCAL_JWT_SECRET || 'cyraquiz-local-offline-secret';
+const STUDENT_SECRET = process.env.STUDENT_JWT_SECRET || 'cyraquiz-student-secret-2026';
+const LOCAL_MODE     = process.env.LOCAL_MODE === 'true';
 
-const db = require('../db');
-
-function makeLocalToken(userId, email) {
-  return jwt.sign({ userId, email }, LOCAL_SECRET, { expiresIn: '12h' });
+function makeToken(userId, email) {
+  return jwt.sign({ userId, email }, JWT_SECRET, { expiresIn: '12h' });
 }
 
-function supabaseClient() {
-  const { createClient } = require('@supabase/supabase-js');
-  return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-}
-
+// ─── Registro de maestro ──────────────────────────────────────────────────────
 router.post('/register', async (req, res) => {
-  if (LOCAL_MODE) {
-    return res.status(503).json({ error: "El registro no está disponible en modo local. Crea tu cuenta desde cyraquiz.vercel.app." });
-  }
-  // Ensure Supabase credentials are present
-  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
-    console.warn('Supabase env missing – registration unavailable');
-    return res.status(503).json({ error: 'Servicio de registro no está configurado. Contacta al administrador.' });
-  }
   const { email, password } = req.body;
+  if (!email || !password)
+    return res.status(400).json({ error: 'Email y contraseña son requeridos' });
+  if (password.length < 6)
+    return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+
   try {
-    const { data, error } = await supabaseClient().auth.admin.createUser({ email, password, email_confirm: true });
-    if (error) return res.status(400).json({ error: error.message });
-    res.json({ message: "Usuario creado en Supabase", user: data.user });
+    const existing = await db.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
+    if (existing.rows.length)
+      return res.status(400).json({ error: 'Este correo ya está registrado' });
+
+    const hash = await bcrypt.hash(password, 10);
+    const { rows } = await db.query(
+      `INSERT INTO users (email, password_hash)
+       VALUES ($1, $2)
+       RETURNING id, email`,
+      [email.toLowerCase(), hash]
+    );
+    const user = rows[0];
+    const token = makeToken(user.id, user.email);
+    res.status(201).json({ message: 'Usuario creado exitosamente', token, user: { id: user.id, email: user.email } });
   } catch (err) {
-    console.error(err);
-    res.status(500).send("Error en el servidor al registrar");
+    console.error('register:', err.message);
+    res.status(500).json({ error: 'Error al registrar usuario' });
   }
 });
 
+// ─── Login de maestro ─────────────────────────────────────────────────────────
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
+  if (!email || !password)
+    return res.status(400).json({ error: 'Email y contraseña son requeridos' });
 
-  if (!LOCAL_MODE) {
-    // ── Modo nube normal ──
-    try {
-      const { data, error } = await supabaseClient().auth.signInWithPassword({ email, password });
-      if (error) {
-        const msg = error.message.includes("Email not confirmed")
-          ? "Por favor, confirma tu correo antes de iniciar sesión."
-          : "Credenciales incorrectas";
-        return res.status(400).json({ error: msg });
-      }
-      return res.json({ message: "Login exitoso", token: data.session.access_token, user: data.user });
-    } catch (err) {
-      console.error(err);
-      return res.status(500).send("Error en el servidor al iniciar sesión");
-    }
-  }
-
-  // ── Modo local: intentar Supabase con timeout, si falla usar caché ──
-  let supabaseUser = null;
   try {
-    const result = await Promise.race([
-      supabaseClient().auth.signInWithPassword({ email, password }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
-    ]);
-    if (!result.error) supabaseUser = result.data?.user;
-  } catch (_) { /* timeout o sin internet */ }
+    const { rows } = await db.query('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
+    if (!rows.length)
+      return res.status(400).json({ error: 'Credenciales incorrectas' });
 
-  if (supabaseUser) {
-    // Online: actualizar caché de credenciales y sincronizar quizzes
-    const hash = await bcrypt.hash(password, 10);
-    localDb.saveUser({ id: supabaseUser.id, email, passwordHash: hash });
+    const user = rows[0];
+    const match = await bcrypt.compare(password, user.password_hash);
+    if (!match)
+      return res.status(400).json({ error: 'Credenciales incorrectas' });
 
-    try {
-      const db = require('../db');
-      const result = await db.query('SELECT * FROM quizzes WHERE user_id = $1', [supabaseUser.id]);
-      const count = localDb.syncQuizzes(result.rows);
-      console.log(`✓ ${count} quizzes sincronizados para ${email}`);
-    } catch (_) { /* La DB de quizzes puede no estar disponible */ }
-
-    const token = makeLocalToken(supabaseUser.id, email);
-    return res.json({ message: "Login exitoso", token, user: supabaseUser });
+    const token = makeToken(user.id, user.email);
+    res.json({ message: 'Login exitoso', token, user: { id: user.id, email: user.email } });
+  } catch (err) {
+    console.error('login:', err.message);
+    res.status(500).json({ error: 'Error al iniciar sesión' });
   }
-
-  // Sin internet: verificar credenciales almacenadas localmente
-  const cached = localDb.findUserByEmail(email);
-  if (!cached) {
-    return res.status(400).json({
-      error: "Sin conexión a internet. Debes iniciar sesión con internet al menos una vez desde este equipo.",
-    });
-  }
-
-  const match = await bcrypt.compare(password, cached.passwordHash);
-  if (!match) return res.status(400).json({ error: "Credenciales incorrectas" });
-
-  console.log(`Login offline para ${email}`);
-  const token = makeLocalToken(cached.id, email);
-  return res.json({ message: "Login exitoso (offline)", token, user: { id: cached.id, email } });
 });
 
+// ─── Forgot Password ──────────────────────────────────────────────────────────
 router.post('/forgot-password', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Email requerido' });
 
   try {
-    await supabaseClient().auth.resetPasswordForEmail(email, {
-      redirectTo: 'https://cyraquiz-frontend.vercel.app/reset-password',
-    });
-    // Siempre retorna éxito para evitar enumeración de emails
+    const { rows } = await db.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
+    // Siempre responder con éxito para evitar enumeración de emails
+    if (!rows.length)
+      return res.json({ message: 'Si el correo existe, recibirás un enlace de recuperación en tu bandeja de entrada.' });
+
+    const userId = rows[0].id;
+    const token  = crypto.randomBytes(32).toString('hex');
+    const expires = new Date(Date.now() + 60 * 60 * 1000); // 1 hora
+
+    await db.query(
+      `INSERT INTO password_reset_tokens (user_id, token, expires_at)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id) DO UPDATE SET token = $2, expires_at = $3`,
+      [userId, token, expires]
+    );
+
+    // TODO: enviar email con el enlace de reset
+    // Por ahora solo log (integrar nodemailer o Resend si se desea)
+    const resetUrl = `https://cyraquiz-frontend.vercel.app/reset-password?token=${token}`;
+    console.log(`Reset URL para ${email}: ${resetUrl}`);
+
     res.json({ message: 'Si el correo existe, recibirás un enlace de recuperación en tu bandeja de entrada.' });
   } catch (err) {
-    console.error(err);
+    console.error('forgot-password:', err.message);
     res.status(500).json({ error: 'Error al procesar la solicitud' });
   }
 });
 
+// ─── Update Password ──────────────────────────────────────────────────────────
 router.post('/update-password', async (req, res) => {
-  const { access_token, new_password } = req.body;
-  if (!access_token || !new_password) return res.status(400).json({ error: 'Datos incompletos' });
-  if (new_password.length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+  const { token, new_password } = req.body;
+  if (!token || !new_password)
+    return res.status(400).json({ error: 'Datos incompletos' });
+  if (new_password.length < 6)
+    return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
 
   try {
-    const { data: { user }, error: authError } = await supabaseClient().auth.getUser(access_token);
-    if (authError || !user) return res.status(400).json({ error: 'Enlace inválido o expirado' });
+    const { rows } = await db.query(
+      `SELECT user_id FROM password_reset_tokens
+       WHERE token = $1 AND expires_at > NOW()`,
+      [token]
+    );
+    if (!rows.length)
+      return res.status(400).json({ error: 'Enlace inválido o expirado' });
 
-    const { error } = await supabaseClient().auth.admin.updateUserById(user.id, { password: new_password });
-    if (error) return res.status(400).json({ error: error.message });
+    const userId = rows[0].user_id;
+    const hash   = await bcrypt.hash(new_password, 10);
+    await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, userId]);
+    await db.query('DELETE FROM password_reset_tokens WHERE user_id = $1', [userId]);
 
     res.json({ message: 'Contraseña actualizada correctamente' });
   } catch (err) {
-    console.error(err);
+    console.error('update-password:', err.message);
     res.status(500).json({ error: 'Error al actualizar la contraseña' });
   }
 });
 
-// ─── Estudiante: Registro ────────────────────────────
+// ─── Estudiante: Registro ─────────────────────────────────────────────────────
 router.post('/student-register', async (req, res) => {
   const { displayName, email, password } = req.body;
   if (!displayName || !email || !password)
     return res.status(400).json({ error: 'Datos incompletos' });
   if (password.length < 6)
     return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+
   try {
     const existing = await db.query(
       'SELECT id FROM student_profiles WHERE email = $1',
@@ -172,11 +168,12 @@ router.post('/student-register', async (req, res) => {
   }
 });
 
-// ─── Estudiante: Login ───────────────────────────────
+// ─── Estudiante: Login ────────────────────────────────────────────────────────
 router.post('/student-login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password)
     return res.status(400).json({ error: 'Datos incompletos' });
+
   try {
     const { rows } = await db.query(
       'SELECT * FROM student_profiles WHERE email = $1',
