@@ -18,11 +18,21 @@ function makeToken(userId, email) {
 
 // ─── Registro de maestro ──────────────────────────────────────────────────────
 router.post('/register', async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, teacher_code } = req.body;
   if (!email || !password)
     return res.status(400).json({ error: 'Email y contraseña son requeridos' });
   if (password.length < 6)
     return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+
+  // Validar código de profesor
+  const validCode = process.env.TEACHER_CODE;
+  if (!validCode) {
+    console.warn('TEACHER_CODE no está definido en las variables de entorno');
+    return res.status(500).json({ error: 'Registro no disponible. Contacta al administrador.' });
+  }
+  if (!teacher_code || teacher_code.trim() !== validCode.trim()) {
+    return res.status(403).json({ error: 'Código de profesor incorrecto' });
+  }
 
   try {
     const existing = await db.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
@@ -44,6 +54,7 @@ router.post('/register', async (req, res) => {
     res.status(500).json({ error: 'Error al registrar usuario' });
   }
 });
+
 
 // ─── Login de maestro ─────────────────────────────────────────────────────────
 router.post('/login', async (req, res) => {
