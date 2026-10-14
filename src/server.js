@@ -1074,12 +1074,64 @@ async function runMigrations() {
       )
     `);
     await db.query(`
+      CREATE TABLE IF NOT EXISTS quizzes (
+        id           SERIAL PRIMARY KEY,
+        user_id      TEXT NOT NULL,
+        title        TEXT NOT NULL,
+        description  TEXT,
+        questions    JSONB,
+        is_public    BOOLEAN DEFAULT false,
+        author_email TEXT,
+        published_at TIMESTAMPTZ,
+        video_url    TEXT,
+        created_at   TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await db.query(`ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS is_public    BOOLEAN DEFAULT false`);
+    await db.query(`ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS author_email TEXT`);
+    await db.query(`ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ`);
+    await db.query(`ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS video_url    TEXT`);
+    await db.query(`
       CREATE TABLE IF NOT EXISTS student_profiles (
         id            SERIAL PRIMARY KEY,
         email         TEXT UNIQUE NOT NULL,
         display_name  TEXT NOT NULL,
         password_hash TEXT NOT NULL,
         created_at    TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS student_quiz_results (
+        id              SERIAL PRIMARY KEY,
+        student_id      INTEGER REFERENCES student_profiles(id) ON DELETE CASCADE,
+        room_code       TEXT,
+        score           INTEGER DEFAULT 0,
+        rank            INTEGER,
+        total_players   INTEGER,
+        correct_answers INTEGER DEFAULT 0,
+        total_questions INTEGER DEFAULT 0,
+        played_at       TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS assignments (
+        id         SERIAL PRIMARY KEY,
+        quiz_id    TEXT,
+        token      TEXT UNIQUE NOT NULL,
+        teacher_id TEXT NOT NULL,
+        title      TEXT,
+        questions  JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS assignment_submissions (
+        id            SERIAL PRIMARY KEY,
+        assignment_id INTEGER REFERENCES assignments(id) ON DELETE CASCADE,
+        student_name  TEXT,
+        answers       JSONB,
+        score         INTEGER DEFAULT 0,
+        submitted_at  TIMESTAMPTZ DEFAULT NOW()
       )
     `);
     console.log('✓ Migraciones aplicadas correctamente');
