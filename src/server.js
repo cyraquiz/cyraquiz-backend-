@@ -1141,7 +1141,9 @@ async function runMigrations() {
 }
 
 server.listen(PORT, "0.0.0.0", async () => {
-  await runMigrations();
+  if (!LOCAL_MODE || process.env.DATABASE_URL) {
+    await runMigrations();
+  }
   if (LOCAL_MODE) {
     const ip  = getLocalIP();
     const url = `http://${ip}:${PORT}`;

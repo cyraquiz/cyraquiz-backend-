@@ -12,8 +12,11 @@ const LOCAL_SECRET   = process.env.LOCAL_JWT_SECRET || 'cyraquiz-local-offline-s
 const STUDENT_SECRET = process.env.STUDENT_JWT_SECRET || 'cyraquiz-student-secret-2026';
 const LOCAL_MODE     = process.env.LOCAL_MODE === 'true';
 
+const localDb        = require('../db/local');
+
 function makeToken(userId, email) {
-  return jwt.sign({ userId, email }, JWT_SECRET, { expiresIn: '12h' });
+  const secret = LOCAL_MODE ? LOCAL_SECRET : JWT_SECRET;
+  return jwt.sign({ userId, email }, secret, { expiresIn: '12h' });
 }
 
 // ─── Registro de maestro ──────────────────────────────────────────────────────
@@ -32,6 +35,24 @@ router.post('/register', async (req, res) => {
   }
   if (!teacher_code || teacher_code.trim() !== validCode.trim()) {
     return res.status(403).json({ error: 'Código de profesor incorrecto' });
+  }
+
+  // Si estamos en modo local y no hay conexión a base de datos externa, guardar en localDb
+  if (LOCAL_MODE) {
+    try {
+      const existingLocal = localDb.findUserByEmail(email.toLowerCase());
+      if (existingLocal) {
+        return res.status(400).json({ error: 'Este correo ya está registrado localmente' });
+      }
+      const hash = await bcrypt.hash(password, 10);
+      const user = { id: Date.now(), email: email.toLowerCase(), passwordHash: hash };
+      localDb.saveUser(user);
+      const token = makeToken(user.id, user.email);
+      return res.status(201).json({ message: 'Usuario creado exitosamente (modo local)', token, user: { id: user.id, email: user.email } });
+    } catch (err) {
+      console.error('register local:', err.message);
+      return res.status(500).json({ error: 'Error al registrar usuario localmente' });
+    }
   }
 
   try {
@@ -62,19 +83,53 @@ router.post('/login', async (req, res) => {
   if (!email || !password)
     return res.status(400).json({ error: 'Email y contraseña son requeridos' });
 
+  // Si estamos en modo local, verificar primero en localDb
+  if (LOCAL_MODE) {
+    const localUser = localDb.findUserByEmail(email.toLowerCase());
+    if (localUser) {
+      const match = await bcrypt.compare(password, localUser.passwordHash);
+      if (match) {
+        const token = makeToken(localUser.id, localUser.email);
+        return res.json({ message: 'Login exitoso (modo local)', token, user: { id: localUser.id, email: localUser.email } });
+      }
+    }
+  }
+
   try {
     const { rows } = await db.query('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
-    if (!rows.length)
+    if (!rows.length) {
+      // Si falló PostgreSQL y estamos en modo local, reintentar con localDb
+      if (LOCAL_MODE) {
+        const localUser = localDb.findUserByEmail(email.toLowerCase());
+        if (localUser && await bcrypt.compare(password, localUser.passwordHash)) {
+          const token = makeToken(localUser.id, localUser.email);
+          return res.json({ message: 'Login exitoso', token, user: { id: localUser.id, email: localUser.email } });
+        }
+      }
       return res.status(400).json({ error: 'Credenciales incorrectas' });
+    }
 
     const user = rows[0];
     const match = await bcrypt.compare(password, user.password_hash);
     if (!match)
       return res.status(400).json({ error: 'Credenciales incorrectas' });
 
+    // Guardar en caché local para futuros inicios de sesión offline
+    if (LOCAL_MODE) {
+      localDb.saveUser({ id: user.id, email: user.email, passwordHash: user.password_hash });
+    }
+
     const token = makeToken(user.id, user.email);
     res.json({ message: 'Login exitoso', token, user: { id: user.id, email: user.email } });
   } catch (err) {
+    // Si la base de datos externa no responde (sin internet en modo local)
+    if (LOCAL_MODE) {
+      const localUser = localDb.findUserByEmail(email.toLowerCase());
+      if (localUser && await bcrypt.compare(password, localUser.passwordHash)) {
+        const token = makeToken(localUser.id, localUser.email);
+        return res.json({ message: 'Login exitoso (offline)', token, user: { id: localUser.id, email: localUser.email } });
+      }
+    }
     console.error('login:', err.message);
     res.status(500).json({ error: 'Error al iniciar sesión' });
   }
