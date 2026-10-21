@@ -68,10 +68,13 @@ app.use('/quizzes', quizRoutes);
 app.use('/assignments', assignmentRoutes);
 app.use('/student', studentAuth, studentRoutes);
 
-const deepseek = new OpenAI({
-  baseURL: 'https://api.deepseek.com',
-  apiKey: process.env.DEEPSEEK_API_KEY
-});
+const deepseek = process.env.DEEPSEEK_API_KEY
+  ? new OpenAI({
+      baseURL: 'https://api.deepseek.com',
+      apiKey: process.env.DEEPSEEK_API_KEY,
+    })
+  : null;
+
 
 const uploadDir = path.join(__dirname, "../uploads");
 if (!fs.existsSync(uploadDir)) {
@@ -782,6 +785,10 @@ Incluye también "time" (entre 15 y 60, en segundos) y "points" (50, 100, 200 o 
 
 RESPONDE ÚNICAMENTE con el array JSON. Sin texto adicional, sin markdown, sin explicaciones.`;
 
+  if (!deepseek) {
+    return res.status(503).json({ error: "La generación con IA no está configurada (falta DEEPSEEK_API_KEY)." });
+  }
+
   try {
     const completion = await deepseek.chat.completions.create({
       messages: [{ role: "user", content: prompt }],
@@ -879,7 +886,11 @@ RESPONDE ÚNICAMENTE con el array JSON. Sin texto adicional, sin markdown, sin e
 Ejemplo:
 [{"type":"single","question":"¿Capital de Francia?","options":["Madrid","París","Roma","Berlín"],"answer":"París","time":20,"points":100}]`;
 
-    const completion = await deepseek.chat.completions.create({
+  if (!deepseek) {
+    return res.status(503).json({ error: "La generación con IA no está configurada (falta DEEPSEEK_API_KEY)." });
+  }
+
+  const completion = await deepseek.chat.completions.create({
       messages: [{ role: "user", content: prompt }],
       model: "deepseek-chat",
       temperature: 0.6,
