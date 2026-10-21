@@ -1053,16 +1053,28 @@ function getLocalIP() {
 
 async function startupSync() {
   const localDb = require('./db/local');
-  console.log('Sincronizando quizzes con la nube...');
+  if (!process.env.DATABASE_URL) {
+    console.log(`ℹ  Modo local offline — datos en ${localDb.DATA_DIR}`);
+    return;
+  }
+
+  console.log('Sincronizando usuarios y quizzes con la nube...');
   try {
+    // Sincronizar usuarios (para que tu cuenta de la nube funcione offline)
+    const usersResult = await db.query('SELECT id, email, password_hash FROM users');
+    const userCount = localDb.syncUsers(usersResult.rows);
+    console.log(`✓ ${userCount} usuario(s) sincronizado(s) localmente`);
+
+    // Sincronizar quizzes
     const result = await db.query('SELECT * FROM quizzes');
-    const count = localDb.syncQuizzes(result.rows);
-    console.log(`✓ ${count} quizzes sincronizados`);
-  } catch {
-    const data = require('./db/local').DATA_DIR;
-    console.log(`⚠  Sin internet — usando datos en ${data}`);
+    const quizCount = localDb.syncQuizzes(result.rows);
+    console.log(`✓ ${quizCount} quizzes sincronizados localmente`);
+  } catch (err) {
+    const data = localDb.DATA_DIR;
+    console.log(`⚠  Sin conexión a la nube (${err.message}) — usando datos offline en ${data}`);
   }
 }
+
 
 const PORT = process.env.PORT || 4000;
 

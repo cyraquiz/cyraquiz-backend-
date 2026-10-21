@@ -30,6 +30,16 @@ module.exports = {
     return read(USERS_FILE).find(u => u.email === email) ?? null;
   },
 
+  syncUsers(rows) {
+    const list = rows.map(u => ({
+      id: u.id,
+      email: u.email,
+      passwordHash: u.password_hash || u.passwordHash,
+    }));
+    write(USERS_FILE, list);
+    return list.length;
+  },
+
   syncQuizzes(rows) {
     write(QUIZZES_FILE, rows);
     return rows.length;
