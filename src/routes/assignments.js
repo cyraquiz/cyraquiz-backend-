@@ -46,7 +46,12 @@ async function ensureTables() {
     )
   `);
 }
-ensureTables().catch(err => console.error("Error creando tablas assignments:", err.message));
+
+const LOCAL_MODE = String(process.env.LOCAL_MODE || '').trim() === 'true';
+if (!LOCAL_MODE && process.env.DATABASE_URL) {
+  ensureTables().catch(err => console.error("Error creando tablas assignments:", err.message));
+}
+
 
 /* ── Profesor: crear asignación ── */
 router.post("/", authorization, async (req, res) => {

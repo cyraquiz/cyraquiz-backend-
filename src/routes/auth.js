@@ -83,29 +83,48 @@ router.post('/login', async (req, res) => {
   if (!email || !password)
     return res.status(400).json({ error: 'Email y contraseña son requeridos' });
 
-  // Si estamos en modo local, verificar primero en localDb
+  const cleanEmail = email.toLowerCase().trim();
+
+  // Si estamos en modo local:
   if (LOCAL_MODE) {
-    const localUser = localDb.findUserByEmail(email.toLowerCase());
+    // 1. Revisar si el usuario ya existe en la base local (~/.cyraquiz/users.json)
+    const localUser = localDb.findUserByEmail(cleanEmail);
     if (localUser) {
       const match = await bcrypt.compare(password, localUser.passwordHash);
       if (match) {
         const token = makeToken(localUser.id, localUser.email);
         return res.json({ message: 'Login exitoso (modo local)', token, user: { id: localUser.id, email: localUser.email } });
       }
+      return res.status(400).json({ error: 'Contraseña incorrecta' });
     }
+
+    // 2. Si no existe en local pero hay DATABASE_URL configurada, intentar consultar la nube
+    if (process.env.DATABASE_URL) {
+      try {
+        const { rows } = await db.query('SELECT * FROM users WHERE email = $1', [cleanEmail]);
+        if (rows.length) {
+          const user = rows[0];
+          const match = await bcrypt.compare(password, user.password_hash);
+          if (!match) return res.status(400).json({ error: 'Contraseña incorrecta' });
+
+          // Guardar copia local para futuros inicios sin internet
+          localDb.saveUser({ id: user.id, email: user.email, passwordHash: user.password_hash });
+          const token = makeToken(user.id, user.email);
+          return res.json({ message: 'Login exitoso', token, user: { id: user.id, email: user.email } });
+        }
+      } catch (err) {
+        console.warn('No se pudo verificar usuario en la nube:', err.message);
+      }
+    }
+
+    // Si no se encontró en local ni en la nube
+    return res.status(400).json({ error: 'Usuario no encontrado. En modo local, regístrate primero con tu código de profesor.' });
   }
 
+  // Modo nube normal (Producción)
   try {
-    const { rows } = await db.query('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
+    const { rows } = await db.query('SELECT * FROM users WHERE email = $1', [cleanEmail]);
     if (!rows.length) {
-      // Si falló PostgreSQL y estamos en modo local, reintentar con localDb
-      if (LOCAL_MODE) {
-        const localUser = localDb.findUserByEmail(email.toLowerCase());
-        if (localUser && await bcrypt.compare(password, localUser.passwordHash)) {
-          const token = makeToken(localUser.id, localUser.email);
-          return res.json({ message: 'Login exitoso', token, user: { id: localUser.id, email: localUser.email } });
-        }
-      }
       return res.status(400).json({ error: 'Credenciales incorrectas' });
     }
 
@@ -114,26 +133,14 @@ router.post('/login', async (req, res) => {
     if (!match)
       return res.status(400).json({ error: 'Credenciales incorrectas' });
 
-    // Guardar en caché local para futuros inicios de sesión offline
-    if (LOCAL_MODE) {
-      localDb.saveUser({ id: user.id, email: user.email, passwordHash: user.password_hash });
-    }
-
     const token = makeToken(user.id, user.email);
     res.json({ message: 'Login exitoso', token, user: { id: user.id, email: user.email } });
   } catch (err) {
-    // Si la base de datos externa no responde (sin internet en modo local)
-    if (LOCAL_MODE) {
-      const localUser = localDb.findUserByEmail(email.toLowerCase());
-      if (localUser && await bcrypt.compare(password, localUser.passwordHash)) {
-        const token = makeToken(localUser.id, localUser.email);
-        return res.json({ message: 'Login exitoso (offline)', token, user: { id: localUser.id, email: localUser.email } });
-      }
-    }
     console.error('login:', err.message);
     res.status(500).json({ error: 'Error al iniciar sesión' });
   }
 });
+
 
 // ─── Forgot Password ──────────────────────────────────────────────────────────
 router.post('/forgot-password', async (req, res) => {
