@@ -3,7 +3,8 @@ const db          = require("../db");
 const localDb     = require("../db/local");
 const authorization = require("../middleware/authorization");
 
-const LOCAL_MODE = process.env.LOCAL_MODE === 'true';
+const LOCAL_MODE = String(process.env.LOCAL_MODE || '').trim() === 'true';
+
 
 // Auto-migration: add public bank columns + video_url if they don't exist yet
 if (!LOCAL_MODE) {

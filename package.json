@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "local": "LOCAL_MODE=true node src/server.js",
-    "local:win": "set LOCAL_MODE=true && node src/server.js",
+    "local:win": "set LOCAL_MODE=true&& node src/server.js",
     "setup:local": "node scripts/setup-local.js"
   },
   "keywords": [],

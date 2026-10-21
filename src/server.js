@@ -19,7 +19,8 @@ const os = require("os");
 const pdf = require("pdf-extraction");
 const OpenAI = require("openai");
 
-const LOCAL_MODE = process.env.LOCAL_MODE === 'true';
+const LOCAL_MODE = String(process.env.LOCAL_MODE || '').trim() === 'true';
+
 
 
 

@@ -10,7 +10,7 @@ require('dotenv').config();
 const JWT_SECRET     = process.env.JWT_SECRET     || 'cyraquiz-secret-2026';
 const LOCAL_SECRET   = process.env.LOCAL_JWT_SECRET || 'cyraquiz-local-offline-secret';
 const STUDENT_SECRET = process.env.STUDENT_JWT_SECRET || 'cyraquiz-student-secret-2026';
-const LOCAL_MODE     = process.env.LOCAL_MODE === 'true';
+const LOCAL_MODE     = String(process.env.LOCAL_MODE || '').trim() === 'true';
 
 const localDb        = require('../db/local');
 
