@@ -10,3 +10,6 @@ uploads/
 # Archivos basura del sistema
 .DS_Store
 Thumbs.db
+
+# Frontend build generado localmente
+public/
