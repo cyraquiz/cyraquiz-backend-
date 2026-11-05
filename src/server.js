@@ -1051,8 +1051,8 @@ function getLocalIP() {
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
     const lowerName = name.toLowerCase();
-    // Ignorar VirtualBox y adaptadores internos
-    if (lowerName.includes('virtualbox') || lowerName.includes('vbox') || lowerName.includes('vethernet')) {
+    // Ignorar VirtualBox y adaptadores de bucle interno
+    if (lowerName.includes('virtualbox') || lowerName.includes('vbox')) {
       continue;
     }
     for (const addr of interfaces[name]) {
