@@ -1049,20 +1049,29 @@ if (LOCAL_MODE) {
 // ── Helpers modo local ──
 function getLocalIP() {
   const interfaces = os.networkInterfaces();
+  
+  // 1. Prioridad: Buscar la IP de la Zona Wi-Fi emitida (192.168.137.x)
   for (const name of Object.keys(interfaces)) {
-    const lowerName = name.toLowerCase();
-    // Ignorar VirtualBox y adaptadores de bucle interno
-    if (lowerName.includes('virtualbox') || lowerName.includes('vbox')) {
-      continue;
-    }
     for (const addr of interfaces[name]) {
-      if (addr.family === 'IPv4' && !addr.internal) {
-        if (!addr.address.startsWith('192.168.56.')) {
-          return addr.address;
-        }
+      if (addr.family === 'IPv4' && !addr.internal && addr.address.startsWith('192.168.137.')) {
+        return addr.address;
       }
     }
   }
+
+  // 2. Si no la encuentra, buscar cualquier IP física activa ignorando VirtualBox
+  for (const name of Object.keys(interfaces)) {
+    const lowerName = name.toLowerCase();
+    if (lowerName.includes('virtualbox') || lowerName.includes('vbox') || lowerName.includes('vethernet')) {
+      continue;
+    }
+    for (const addr of interfaces[name]) {
+      if (addr.family === 'IPv4' && !addr.internal && !addr.address.startsWith('192.168.56.')) {
+        return addr.address;
+      }
+    }
+  }
+
   return 'localhost';
 }
 async function startupSync() {
@@ -1183,8 +1192,7 @@ server.listen(PORT, "0.0.0.0", async () => {
     await runMigrations();
   }
   if (LOCAL_MODE) {
-    // Obtenemos la IP local filtrando VirtualBox
-    const ip = getLocalIP();
+    const ip  = getLocalIP();
     const url = `http://${ip}:${PORT}`;
 
     console.log('\n╔═══════════════════════════════════════════════╗');
