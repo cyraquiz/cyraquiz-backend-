@@ -1050,14 +1050,13 @@ if (LOCAL_MODE) {
 function getLocalIP() {
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
-    // Ignorar interfaces virtuales comunes en Windows
     const lowerName = name.toLowerCase();
-    if (lowerName.includes('virtualbox') || lowerName.includes('vbox') || lowerName.includes('vEthernet') || lowerName.includes('vmnet')) {
+    // Ignorar VirtualBox y adaptadores internos
+    if (lowerName.includes('virtualbox') || lowerName.includes('vbox') || lowerName.includes('vethernet')) {
       continue;
     }
     for (const addr of interfaces[name]) {
       if (addr.family === 'IPv4' && !addr.internal) {
-        // Ignorar la subred fija de VirtualBox
         if (!addr.address.startsWith('192.168.56.')) {
           return addr.address;
         }
