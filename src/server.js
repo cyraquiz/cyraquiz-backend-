@@ -31,7 +31,10 @@ app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  if (!LOCAL_MODE) {
+  if (LOCAL_MODE) {
+    // max-age=0 le ordena a los navegadores móviles olvidar cualquier forzado de HTTPS
+    res.setHeader("Strict-Transport-Security", "max-age=0");
+  } else {
     res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
   }
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
@@ -1045,14 +1048,24 @@ if (LOCAL_MODE) {
 
 // ── Helpers modo local ──
 function getLocalIP() {
-  for (const addrs of Object.values(os.networkInterfaces())) {
-    for (const addr of addrs) {
-      if (addr.family === 'IPv4' && !addr.internal) return addr.address;
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    // Ignorar interfaces virtuales comunes en Windows
+    const lowerName = name.toLowerCase();
+    if (lowerName.includes('virtualbox') || lowerName.includes('vbox') || lowerName.includes('vEthernet') || lowerName.includes('vmnet')) {
+      continue;
+    }
+    for (const addr of interfaces[name]) {
+      if (addr.family === 'IPv4' && !addr.internal) {
+        // Ignorar la subred fija de VirtualBox
+        if (!addr.address.startsWith('192.168.56.')) {
+          return addr.address;
+        }
+      }
     }
   }
   return 'localhost';
 }
-
 async function startupSync() {
   const localDb = require('./db/local');
   if (!process.env.DATABASE_URL) {
