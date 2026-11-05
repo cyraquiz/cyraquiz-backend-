@@ -1185,7 +1185,18 @@ server.listen(PORT, "0.0.0.0", async () => {
   }
   if (LOCAL_MODE) {
     const ip  = getLocalIP();
-    const url = `http://${ip}:${PORT}`;
+    let url = `http://${ip}:${PORT}`;
+
+    // Intentar abrir localtunnel si estamos en una red restringida (ej. Universidad)
+    try {
+      const localtunnel = require('localtunnel');
+      const tunnel = await localtunnel({ port: PORT });
+      url = tunnel.url;
+      console.log(`\n🚀 Túnel público activo para la universidad: ${url}`);
+    } catch (err) {
+      console.log('\n⚠ No se pudo iniciar localtunnel, usando IP local en su lugar.');
+    }
+
     console.log('\n╔═══════════════════════════════════════════════╗');
     console.log('║         CYRAQuiz  —  Modo Local               ║');
     console.log(`║  URL: ${url.padEnd(40)}║`);
@@ -1200,4 +1211,3 @@ server.listen(PORT, "0.0.0.0", async () => {
     console.log(`Server listening on port ${PORT}`);
   }
 });
-
