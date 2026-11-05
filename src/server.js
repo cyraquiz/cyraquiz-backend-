@@ -1183,28 +1183,21 @@ server.listen(PORT, "0.0.0.0", async () => {
     await runMigrations();
   }
   if (LOCAL_MODE) {
-    const ip  = getLocalIP();
-    let url = `http://${ip}:${PORT}`;
-
-    // Intentar abrir localtunnel si estamos en una red restringida (ej. Universidad)
-    try {
-      const localtunnel = require('localtunnel');
-      const tunnel = await localtunnel({ port: PORT });
-      url = tunnel.url;
-      console.log(`\n🚀 Túnel público activo para la universidad: ${url}`);
-    } catch (err) {
-      console.log('\n⚠ No se pudo iniciar localtunnel, usando IP local en su lugar.');
-    }
+    // Obtenemos la IP local filtrando VirtualBox
+    const ip = getLocalIP();
+    const url = `http://${ip}:${PORT}`;
 
     console.log('\n╔═══════════════════════════════════════════════╗');
     console.log('║         CYRAQuiz  —  Modo Local               ║');
     console.log(`║  URL: ${url.padEnd(40)}║`);
     console.log('║  Comparte esta URL con tus estudiantes        ║');
     console.log('╚═══════════════════════════════════════════════╝\n');
+
     try {
       const qr = require('qrcode-terminal');
       qr.generate(url, { small: true });
     } catch { /* qrcode-terminal opcional */ }
+
     await startupSync();
   } else {
     console.log(`Server listening on port ${PORT}`);
