@@ -1161,6 +1161,19 @@ async function runMigrations() {
       )
     `);
     await db.query(`
+      CREATE TABLE IF NOT EXISTS student_sessions (
+        id              SERIAL PRIMARY KEY,
+        student_id      INTEGER REFERENCES student_profiles(id) ON DELETE CASCADE,
+        room_code       TEXT,
+        score           INTEGER DEFAULT 0,
+        rank            INTEGER,
+        total_players   INTEGER,
+        correct_answers INTEGER DEFAULT 0,
+        total_questions INTEGER DEFAULT 0,
+        played_at       TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await db.query(`
       CREATE TABLE IF NOT EXISTS assignments (
         id         SERIAL PRIMARY KEY,
         quiz_id    TEXT,
@@ -1168,19 +1181,23 @@ async function runMigrations() {
         teacher_id TEXT NOT NULL,
         title      TEXT,
         questions  JSONB,
-        created_at TIMESTAMPTZ DEFAULT NOW()
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        is_active  BOOLEAN DEFAULT TRUE
       )
     `);
+    await db.query(`ALTER TABLE assignments ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE`);
     await db.query(`
       CREATE TABLE IF NOT EXISTS assignment_submissions (
-        id            SERIAL PRIMARY KEY,
-        assignment_id INTEGER REFERENCES assignments(id) ON DELETE CASCADE,
-        student_name  TEXT,
-        answers       JSONB,
-        score         INTEGER DEFAULT 0,
-        submitted_at  TIMESTAMPTZ DEFAULT NOW()
+        id             SERIAL PRIMARY KEY,
+        assignment_id  INTEGER REFERENCES assignments(id) ON DELETE CASCADE,
+        student_name   TEXT,
+        answers        JSONB,
+        score          INTEGER DEFAULT 0,
+        total_possible INTEGER NOT NULL DEFAULT 0,
+        submitted_at   TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+    await db.query(`ALTER TABLE assignment_submissions ADD COLUMN IF NOT EXISTS total_possible INTEGER NOT NULL DEFAULT 0`);
     console.log('✓ Migraciones aplicadas correctamente');
   } catch (err) {
     console.error('✗ Error en migraciones:', err.message);
